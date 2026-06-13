@@ -402,6 +402,46 @@ export async function handleFavorite(interaction: ChatInputCommandInteraction): 
   }
 }
 
+export async function handleMyStats(interaction: ChatInputCommandInteraction): Promise<void> {
+  const stats = getUserStats(interaction.user.id);
+  if (!stats || stats.totalTracks === 0) {
+    await interaction.reply({ content: 'You haven\'t listened to any tracks yet!', flags: MessageFlags.Ephemeral });
+    return;
+  }
+
+  const topTracks = Object.entries(stats.trackCounts)
+    .sort(([, a], [, b]) => b - a)
+    .slice(0, 5);
+
+  const recent = stats.lastPlayed.slice(0, 5);
+
+  const embed = new EmbedBuilder()
+    .setTitle('Your Music Stats')
+    .setColor(0x5865F2)
+    .setThumbnail(interaction.user.displayAvatarURL())
+    .addFields(
+      { name: '📊 Overview', value: [
+        `**Tracks played:** ${stats.totalTracks}`,
+        `**Total time:** ${formatDuration(stats.totalDuration)}`,
+      ].join('\n') },
+      { name: '🔥 Most Played', value: topTracks.length
+        ? topTracks.map(([url, count], i) => `**${i + 1}.** [${stats.lastPlayed.find(t => t.url === url)?.title ?? url}](${url}) — ${count} play${count > 1 ? 's' : ''}`).join('\n')
+        : 'No data yet',
+      },
+      { name: '⏪ Recent Tracks', value: recent.length
+        ? recent.map((t, i) => `**${i + 1}.** [${t.title}](${t.url})`).join('\n')
+        : 'No data yet',
+      },
+    );
+
+  await interaction.reply({ embeds: [embed] });
+}
+
+export async function handleAbout(interaction: ChatInputCommandInteraction): Promise<void> {
+  const { aboutEmbed } = await import('../utils/embed.js');
+  await interaction.reply(aboutEmbed());
+}
+
 export async function handleStats(interaction: ChatInputCommandInteraction): Promise<void> {
   const s = getStats();
   const hours = Math.floor(s.totalDuration / 3600);
@@ -651,41 +691,6 @@ export async function handleHelp(interaction: ChatInputCommandInteraction): Prom
       ].join('\n') },
     )
     .setFooter({ text: 'Buttons in the player also control playback' });
-
-  await interaction.reply({ embeds: [embed] });
-}
-
-export async function handleMyStats(interaction: ChatInputCommandInteraction): Promise<void> {
-  const stats = getUserStats(interaction.user.id);
-  if (!stats || stats.totalTracks === 0) {
-    await interaction.reply({ content: 'You haven\'t listened to any tracks yet!', flags: MessageFlags.Ephemeral });
-    return;
-  }
-
-  const topTracks = Object.entries(stats.trackCounts)
-    .sort(([, a], [, b]) => b - a)
-    .slice(0, 5);
-
-  const recent = stats.lastPlayed.slice(0, 5);
-
-  const embed = new EmbedBuilder()
-    .setTitle('Your Music Stats')
-    .setColor(0x5865F2)
-    .setThumbnail(interaction.user.displayAvatarURL())
-    .addFields(
-      { name: '📊 Overview', value: [
-        `**Tracks played:** ${stats.totalTracks}`,
-        `**Total time:** ${formatDuration(stats.totalDuration)}`,
-      ].join('\n') },
-      { name: '🔥 Most Played', value: topTracks.length
-        ? topTracks.map(([url, count], i) => `**${i + 1}.** [${stats.lastPlayed.find(t => t.url === url)?.title ?? url}](${url}) — ${count} play${count > 1 ? 's' : ''}`).join('\n')
-        : 'No data yet',
-      },
-      { name: '⏪ Recent Tracks', value: recent.length
-        ? recent.map((t, i) => `**${i + 1}.** [${t.title}](${t.url})`).join('\n')
-        : 'No data yet',
-      },
-    );
 
   await interaction.reply({ embeds: [embed] });
 }

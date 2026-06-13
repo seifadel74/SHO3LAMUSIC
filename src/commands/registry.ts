@@ -67,6 +67,9 @@ const commands = [
     .setName('help')
     .setDescription('Show a list of available commands'),
   new SlashCommandBuilder()
+    .setName('about')
+    .setDescription('Show the bot showcase & information'),
+  new SlashCommandBuilder()
     .setName('mystats')
     .setDescription('Show your personal listening statistics'),
 ];
