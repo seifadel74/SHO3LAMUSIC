@@ -6,7 +6,7 @@
   "scripts": {
     "dev": "tsx watch src/index.ts",
     "start": "node dist/index.js",
-    "postinstall": "node scripts/download-yt-dlp.cjs",
+    "postinstall": "node -e \"process.platform=='win32'||require('fs').existsSync('yt-dlp')||require('child_process').execSync('curl -sL https://github.com/yt-dlp/yt-dlp/releases/latest/download/yt-dlp -o yt-dlp',{stdio:'inherit'})||require('fs').chmodSync('yt-dlp',0o755)\"",
     "build": "tsc",
     "register": "tsx src/commands/registry.ts",
     "lint": "tsc --noEmit"
