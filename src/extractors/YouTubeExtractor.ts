@@ -1,6 +1,6 @@
 import { Readable } from 'stream';
 import { spawn, execSync } from 'child_process';
-import { writeFileSync, existsSync } from 'fs';
+import { writeFileSync, existsSync, chmodSync } from 'fs';
 import { tmpdir } from 'os';
 import { join } from 'path';
 import { Source } from '../types.js';
@@ -8,7 +8,13 @@ import type { IExtractor, SearchResult } from './IExtractor.js';
 import ytSearch from 'yt-search';
 
 const COOKIE_FILE = join(tmpdir(), 'yt-cookies.txt');
-const YT_DLP = existsSync('yt-dlp') ? './yt-dlp' : 'yt-dlp';
+const YT_DLP = process.platform === 'win32' || existsSync('yt-dlp') ? './yt-dlp' : (() => {
+  console.log('Downloading yt-dlp...');
+  execSync('curl -sL https://github.com/yt-dlp/yt-dlp/releases/latest/download/yt-dlp -o yt-dlp', { stdio: 'inherit' });
+  chmodSync('yt-dlp', 0o755);
+  console.log('yt-dlp ready');
+  return './yt-dlp';
+})();
 
 const FALLBACK_COOKIES = `# Netscape HTTP Cookie File
 # This is a generated file! Do not edit.
