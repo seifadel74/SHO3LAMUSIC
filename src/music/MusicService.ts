@@ -35,6 +35,7 @@ import { nowPlayingButtons } from '../interactions/buttons.js';
 import { formatDuration } from '../utils/embed.js';
 import { addFavorite, removeFavorite, getUserFavorites, loadFavorites } from './FavStore.js';
 import { trackPlayed, getStats, loadStats } from './StatsStore.js';
+import { trackPlayedByUser, loadUserStats, getUserStats } from './UserStatsStore.js';
 
 const players = new Map<Snowflake, Player>();
 const idleTimers = new Map<Snowflake, NodeJS.Timeout>();
@@ -69,6 +70,7 @@ function ensureInit() {
     initQueues();
     loadFavorites();
     loadStats();
+    loadUserStats();
     initialized = true;
   }
 }
@@ -173,6 +175,7 @@ async function playTrackInternal(guildId: Snowflake, track: Track): Promise<void
   if (!connection) return;
 
   trackPlayed(track.duration, track.requestedBy);
+  trackPlayedByUser(track.requestedBy, track.title, track.url, track.duration);
 
   const onTrackEnd = () => setUpNextTrack(guildId);
   player.setOnFinish(onTrackEnd);
@@ -207,6 +210,7 @@ async function playCurrent(interaction: ChatInputCommandInteraction, guildId: Sn
   if (!connection) return;
 
   trackPlayed(track.duration, track.requestedBy);
+  trackPlayedByUser(track.requestedBy, track.title, track.url, track.duration);
 
   const onTrackEnd = () => setUpNextTrack(guildId);
   player.setOnFinish(onTrackEnd);
@@ -642,10 +646,46 @@ export async function handleHelp(interaction: ChatInputCommandInteraction): Prom
       ].join('\n') },
       { name: '📊 Other', value: [
         '`/stats` - Show bot statistics',
+        '`/mystats` - Show your personal statistics',
         '`/help` - Show this message',
       ].join('\n') },
     )
     .setFooter({ text: 'Buttons in the player also control playback' });
+
+  await interaction.reply({ embeds: [embed] });
+}
+
+export async function handleMyStats(interaction: ChatInputCommandInteraction): Promise<void> {
+  const stats = getUserStats(interaction.user.id);
+  if (!stats || stats.totalTracks === 0) {
+    await interaction.reply({ content: 'You haven\'t listened to any tracks yet!', flags: MessageFlags.Ephemeral });
+    return;
+  }
+
+  const topTracks = Object.entries(stats.trackCounts)
+    .sort(([, a], [, b]) => b - a)
+    .slice(0, 5);
+
+  const recent = stats.lastPlayed.slice(0, 5);
+
+  const embed = new EmbedBuilder()
+    .setTitle('Your Music Stats')
+    .setColor(0x5865F2)
+    .setThumbnail(interaction.user.displayAvatarURL())
+    .addFields(
+      { name: '📊 Overview', value: [
+        `**Tracks played:** ${stats.totalTracks}`,
+        `**Total time:** ${formatDuration(stats.totalDuration)}`,
+      ].join('\n') },
+      { name: '🔥 Most Played', value: topTracks.length
+        ? topTracks.map(([url, count], i) => `**${i + 1}.** [${stats.lastPlayed.find(t => t.url === url)?.title ?? url}](${url}) — ${count} play${count > 1 ? 's' : ''}`).join('\n')
+        : 'No data yet',
+      },
+      { name: '⏪ Recent Tracks', value: recent.length
+        ? recent.map((t, i) => `**${i + 1}.** [${t.title}](${t.url})`).join('\n')
+        : 'No data yet',
+      },
+    );
 
   await interaction.reply({ embeds: [embed] });
 }

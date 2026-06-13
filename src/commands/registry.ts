@@ -66,6 +66,9 @@ const commands = [
   new SlashCommandBuilder()
     .setName('help')
     .setDescription('Show a list of available commands'),
+  new SlashCommandBuilder()
+    .setName('mystats')
+    .setDescription('Show your personal listening statistics'),
 ];
 
 const rest = new REST({ version: '10' }).setToken(config.token);
