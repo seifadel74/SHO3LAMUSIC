@@ -4,19 +4,44 @@ import type { IExtractor, SearchResult } from './IExtractor.js';
 import ytdl from '@distube/ytdl-core';
 import ytSearch from 'yt-search';
 
-const cookieStr = process.env.YOUTUBE_COOKIES;
+const raw = process.env.YOUTUBE_COOKIES;
 let agent: ReturnType<typeof ytdl.createAgent> | undefined;
-if (cookieStr) {
-  const cookies = cookieStr
-    .split(';')
-    .map((pair) => {
-      const eq = pair.indexOf('=');
-      if (eq === -1) return null;
-      return { name: pair.slice(0, eq).trim(), value: pair.slice(eq + 1).trim() };
-    })
-    .filter(Boolean) as { name: string; value: string }[];
-  if (cookies.length) agent = ytdl.createAgent(cookies);
+
+function tryCreateAgent(): typeof agent {
+  if (!raw) return;
+  const parts = raw.includes('#') ? raw.split(/\r?\n/).filter((l) => !l.startsWith('#') && l.includes('\t')) : raw.split(';');
+  const cookies: { name: string; value: string }[] = [];
+
+  for (const part of parts) {
+    const trimmed = part.trim();
+    if (!trimmed) continue;
+    const fields = trimmed.split('\t');
+    let name: string, value: string;
+    if (fields.length >= 7) {
+      // Netscape cookie file format: domain  flag  path  secure  expiry  name  value
+      name = fields[5]?.trim();
+      value = fields[6]?.trim();
+    } else {
+      const eq = trimmed.indexOf('=');
+      if (eq <= 0) continue;
+      name = trimmed.slice(0, eq).trim();
+      value = trimmed.slice(eq + 1).trim();
+    }
+    if (!name || !value) continue;
+    // Skip cookies with invalid characters in value
+    if (/[\x00-\x1f\x7f"(),\\<>@;:{}\[\]\?]/.test(value)) continue;
+    cookies.push({ name, value });
+  }
+
+  if (!cookies.length) return;
+  try {
+    return ytdl.createAgent(cookies);
+  } catch {
+    return;
+  }
 }
+
+agent = tryCreateAgent();
 
 const requestOptions: ytdl.downloadOptions = agent ? { agent } : {};
 
@@ -83,10 +108,11 @@ export class YouTubeExtractor implements IExtractor {
   }
 
   async stream(url: string): Promise<Readable> {
-    const info = await retry(() => ytdl.getInfo(url, requestOptions));
+    const opts: ytdl.downloadOptions = { ...requestOptions };
+    const info = await retry(() => ytdl.getInfo(url, opts));
     const audio = ytdl.filterFormats(info.formats, 'audioonly');
     if (!audio.length) throw new Error('No audio stream found');
     const format = ytdl.chooseFormat(audio, { quality: 'highestaudio' });
-    return ytdl.downloadFromInfo(info, { format }) as Readable;
+    return ytdl.downloadFromInfo(info, { ...opts, format }) as Readable;
   }
 }
