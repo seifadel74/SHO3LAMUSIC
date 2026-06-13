@@ -41,7 +41,7 @@ const baseFlags = [
   '--retry-sleep', '3',
   '--user-agent', 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/120.0.0.0 Safari/537.36',
   '--geo-bypass',
-  '--extractor-args', 'youtube:player-client=android',
+  '--extractor-args', 'youtube:player_client=android_creator,android;skip=webpage',
   ...cookiesFlag,
 ];
 
