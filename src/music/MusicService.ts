@@ -30,8 +30,29 @@ import { logger } from '../core/Logger.js';
 import { nowPlayingButtons } from '../interactions/buttons.js';
 
 const players = new Map<Snowflake, Player>();
+const idleTimers = new Map<Snowflake, NodeJS.Timeout>();
 
 let initialized = false;
+
+const IDLE_TIMEOUT_MS = 15 * 60 * 1000;
+
+function clearIdleTimer(guildId: Snowflake) {
+  const timer = idleTimers.get(guildId);
+  if (timer) {
+    clearTimeout(timer);
+    idleTimers.delete(guildId);
+  }
+}
+
+function startIdleTimer(guildId: Snowflake) {
+  clearIdleTimer(guildId);
+  idleTimers.set(guildId, setTimeout(() => {
+    idleTimers.delete(guildId);
+    disconnectFromVoice(guildId);
+    deleteQueue(guildId);
+    deleteNowPlayingMessage(guildId);
+  }, IDLE_TIMEOUT_MS));
+}
 
 function ensureInit() {
   if (!initialized) {
@@ -78,11 +99,10 @@ async function setUpNextTrack(guildId: Snowflake) {
   const queue = getQueue(guildId);
   const next = skipTrackAndSave(queue);
   if (next) {
+    clearIdleTimer(guildId);
     await playTrackInternal(guildId, next);
   } else {
-    disconnectFromVoice(guildId);
-    deleteQueue(guildId);
-    deleteNowPlayingMessage(guildId);
+    startIdleTimer(guildId);
   }
 }
 
@@ -92,11 +112,14 @@ async function playTrackInternal(guildId: Snowflake, track: Track): Promise<void
   const connection = getConnection(guildId);
   if (!connection) return;
 
+  const onTrackEnd = () => setUpNextTrack(guildId);
+  player.setOnFinish(onTrackEnd);
+  player.setOnError(onTrackEnd);
+
   try {
     const stream = await track.stream();
     player.subscribe(connection);
     player.play(stream, queue.volume);
-    player.setOnFinish(() => setUpNextTrack(guildId));
 
     const { nowPlayingEmbed } = await import('../utils/embed.js');
     const embed = nowPlayingEmbed(track);
@@ -121,11 +144,14 @@ async function playCurrent(interaction: ChatInputCommandInteraction, guildId: Sn
   const connection = getConnection(guildId);
   if (!connection) return;
 
+  const onTrackEnd = () => setUpNextTrack(guildId);
+  player.setOnFinish(onTrackEnd);
+  player.setOnError(onTrackEnd);
+
   try {
     const stream = await track.stream();
     player.subscribe(connection);
     player.play(stream, queue.volume);
-    player.setOnFinish(() => setUpNextTrack(guildId));
 
     const { nowPlayingEmbed } = await import('../utils/embed.js');
     const embed = nowPlayingEmbed(track);
@@ -154,6 +180,7 @@ export async function handlePlay(interaction: ChatInputCommandInteraction): Prom
   }
 
   const guildId = interaction.guildId!;
+  clearIdleTimer(guildId);
   const queue = getQueue(guildId);
 
   connectToVoice(interaction.guild!, voiceChannel.id);
@@ -185,8 +212,10 @@ export async function handlePlay(interaction: ChatInputCommandInteraction): Prom
 
 export async function handleSkip(interaction: ChatInputCommandInteraction): Promise<void> {
   const guildId = interaction.guildId!;
+  clearIdleTimer(guildId);
   const player = getPlayer(guildId);
   player.setOnFinish(null);
+  player.setOnError(null);
   player.stop();
   await setUpNextTrack(guildId);
   await interaction.reply({ content: 'Skipped.' });
@@ -194,8 +223,10 @@ export async function handleSkip(interaction: ChatInputCommandInteraction): Prom
 
 export async function handleStop(interaction: ChatInputCommandInteraction): Promise<void> {
   const guildId = interaction.guildId!;
+  clearIdleTimer(guildId);
   const p = getPlayer(guildId);
   p.setOnFinish(null);
+  p.setOnError(null);
   p.stop();
   clearQueueAndSave(getQueue(guildId));
   disconnectFromVoice(guildId);
@@ -286,6 +317,7 @@ export async function handleJump(interaction: ChatInputCommandInteraction): Prom
   }
   const p2 = getPlayer(interaction.guildId!);
   p2.setOnFinish(null);
+  p2.setOnError(null);
   p2.stop();
   await playCurrent(interaction, interaction.guildId!);
   await interaction.reply({ content: `Jumped to **${track.title}**.` });
@@ -313,9 +345,11 @@ export async function handleButtonInteraction(interaction: ButtonInteraction): P
     }
     case 'music_skip': {
       player.setOnFinish(null);
+      player.setOnError(null);
       player.stop();
       const next = skipTrackAndSave(queue);
       if (next) {
+        clearIdleTimer(guildId);
         const stream = await next.stream();
         player.subscribe(conn!);
         player.play(stream, queue.volume);
@@ -326,16 +360,14 @@ export async function handleButtonInteraction(interaction: ButtonInteraction): P
           try { await msg.edit({ embeds: [nowPlayingEmbed(next)], components: nowPlayingButtons(false, queue.loopMode) }); } catch {}
         }
       } else {
-        disconnectFromVoice(guildId);
-        deleteQueue(guildId);
-        const msg = await import('./QueueManager.js').then(m => m.getNowPlayingMessage(guildId));
-        if (msg) { try { await msg.delete(); } catch {} }
-        deleteNowPlayingMessage(guildId);
+        startIdleTimer(guildId);
       }
       break;
     }
     case 'music_stop': {
+      clearIdleTimer(guildId);
       player.setOnFinish(null);
+      player.setOnError(null);
       player.stop();
       clearQueueAndSave(queue);
       disconnectFromVoice(guildId);
