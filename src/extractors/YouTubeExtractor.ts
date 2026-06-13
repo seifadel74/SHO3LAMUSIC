@@ -56,6 +56,7 @@ function tryCreateAgent(): typeof agent {
       value = trimmed.slice(eq + 1).trim();
     }
     if (!name || !value) continue;
+    try { value = decodeURIComponent(value); } catch { /* keep as-is */ }
     // Skip cookies with invalid characters in value
     if (/[\x00-\x1f\x7f"(),\\<>@;:{}\[\]\?]/.test(value)) continue;
     cookies.push({ name, value });
