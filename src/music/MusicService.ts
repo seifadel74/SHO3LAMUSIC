@@ -183,6 +183,8 @@ export async function handlePlay(interaction: ChatInputCommandInteraction): Prom
   clearIdleTimer(guildId);
   const queue = getQueue(guildId);
 
+  await interaction.deferReply();
+
   connectToVoice(interaction.guild!, voiceChannel.id);
 
   const extractor = getExtractor(query);
@@ -191,7 +193,7 @@ export async function handlePlay(interaction: ChatInputCommandInteraction): Prom
     : (await extractor.search(query))[0];
 
   if (!result) {
-    await interaction.reply({ content: 'No results found.', flags: MessageFlags.Ephemeral });
+    await interaction.editReply({ content: 'No results found.' });
     return;
   }
 
@@ -202,7 +204,7 @@ export async function handlePlay(interaction: ChatInputCommandInteraction): Prom
   };
 
   const pos = addTrackAndSave(queue, track);
-  await interaction.reply({ content: `Added **${track.title}** — position #${pos}` });
+  await interaction.editReply({ content: `Added **${track.title}** — position #${pos}` });
 
   if (queue.tracks.length === 1) {
     queue.currentIndex = 0;

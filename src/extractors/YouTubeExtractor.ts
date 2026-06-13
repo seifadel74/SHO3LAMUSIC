@@ -27,21 +27,12 @@ function execYtDlp(args: string[], timeout = 20000): Promise<{ stdout: string; s
   });
 }
 
-import { writeFileSync } from 'fs';
-import { join } from 'path';
-
-const UA = 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/120.0.0.0 Safari/537.36';
-
-const COOKIE_PATH = join('/tmp', 'youtube_cookies.txt');
-const cookieFlags: string[] = process.env.YOUTUBE_COOKIES
-  ? (writeFileSync(COOKIE_PATH, process.env.YOUTUBE_COOKIES), ['--cookies', COOKIE_PATH])
-  : [];
-
 const baseFlags = [
-  '--no-playlist', '--no-warnings',
+  '--no-playlist',
+  '--no-warnings',
   '--extractor-retries', '3',
-  '--user-agent', UA,
-  ...cookieFlags,
+  '--extractor-args', 'youtube:player_client=android&player_skip=webpage,configs',
+  '--user-agent', 'Mozilla/5.0 (Linux; Android 14) AppleWebKit/537.36 Chrome/120.0.6099.230 Mobile Safari/537.36',
 ];
 
 export class YouTubeExtractor implements IExtractor {
@@ -90,7 +81,7 @@ export class YouTubeExtractor implements IExtractor {
     const streamUrl = stdout.trim();
     if (!streamUrl) throw new Error('Could not extract stream URL');
 
-    const res = await fetch(streamUrl, { headers: { 'User-Agent': UA } });
+    const res = await fetch(streamUrl, { headers: { 'User-Agent': 'Mozilla/5.0 (Linux; Android 14) AppleWebKit/537.36 Chrome/120.0.6099.230 Mobile Safari/537.36' } });
     if (!res.ok || !res.body) throw new Error(`Stream HTTP ${res.status}`);
     return Readable.fromWeb(res.body as any);
   }
