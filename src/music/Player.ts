@@ -28,7 +28,6 @@ export class Player {
     });
 
     this.player.on('error', (err) => {
-      logger.error('AudioPlayer error:', err.message);
       this.onError?.(err);
     });
   }

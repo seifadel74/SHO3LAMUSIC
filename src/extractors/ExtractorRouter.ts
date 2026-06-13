@@ -11,10 +11,7 @@ export function initExtractors(): void {
 }
 
 function detectSource(query: string): Source {
-  const ytPattern = /youtube\.com|youtu\.be/;
-  const scPattern = /soundcloud\.com/;
-  if (ytPattern.test(query)) return Source.YouTube;
-  if (scPattern.test(query)) return Source.SoundCloud;
+  if (/soundcloud\.com/i.test(query)) return Source.SoundCloud;
   return Source.YouTube;
 }
 

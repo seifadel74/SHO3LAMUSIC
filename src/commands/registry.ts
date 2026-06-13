@@ -4,7 +4,7 @@ import { config } from '../config.js';
 const commands = [
   new SlashCommandBuilder()
     .setName('play')
-    .setDescription('Play a song from YouTube or SoundCloud')
+    .setDescription('Play a song, playlist, or search query')
     .addStringOption((o) => o.setName('query').setDescription('URL or search query').setRequired(true)),
   new SlashCommandBuilder()
     .setName('skip')
@@ -48,6 +48,21 @@ const commands = [
     .setName('jump')
     .setDescription('Jump to a track in the queue')
     .addIntegerOption((o) => o.setName('position').setDescription('Track position').setRequired(true).setMinValue(1)),
+  new SlashCommandBuilder()
+    .setName('suggest')
+    .setDescription('Show suggested tracks based on the current song'),
+  new SlashCommandBuilder()
+    .setName('favorite')
+    .setDescription('Manage your favorite tracks')
+    .addSubcommand((s) => s.setName('add').setDescription('Add the current track to favorites'))
+    .addSubcommand((s) => s.setName('list').setDescription('Show your favorite tracks'))
+    .addSubcommand((s) =>
+      s.setName('remove').setDescription('Remove a track from favorites')
+        .addIntegerOption((o) => o.setName('index').setDescription('Track number').setRequired(true).setMinValue(1)),
+    ),
+  new SlashCommandBuilder()
+    .setName('stats')
+    .setDescription('Show bot usage statistics'),
 ];
 
 const rest = new REST({ version: '10' }).setToken(config.token);

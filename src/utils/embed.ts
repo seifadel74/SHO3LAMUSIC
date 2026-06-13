@@ -24,16 +24,20 @@ export function queueEmbed(tracks: Track[], currentIndex: number, loopMode: Loop
   const description = pageTracks
     .map((t, i) => {
       const idx = start + i;
-      const prefix = idx === currentIndex ? '**▶' : `${idx + 1}.`;
-      return `${prefix} [${t.title}](${t.url}) — ${formatDuration(t.duration)} [${t.requestedBy}]`;
+      if (idx < currentIndex) return `~~${idx + 1}. [${t.title}](${t.url}) — ${formatDuration(t.duration)}~~ ✅`;
+      if (idx === currentIndex) return `**▶ ${idx + 1}. [${t.title}](${t.url}) — ${formatDuration(t.duration)}**`;
+      return `${idx + 1}. [${t.title}](${t.url}) — ${formatDuration(t.duration)} [${t.requestedBy}]`;
     })
     .join('\n');
+
+  const played = currentIndex > 0 ? `\n✅ Played: ${currentIndex} track${currentIndex > 1 ? 's' : ''}` : '';
+  const upcoming = currentIndex >= 0 && currentIndex < tracks.length - 1 ? ` Upcoming: ${tracks.length - 1 - currentIndex}` : '';
 
   return new EmbedBuilder()
     .setColor(EMBED_COLORS.primary)
     .setTitle(`Queue (${tracks.length} tracks)`)
     .setDescription(description || 'Empty queue')
-    .setFooter({ text: `Page ${page}/${totalPages} • Loop: ${loopMode.toUpperCase()}` });
+    .setFooter({ text: `Page ${page}/${totalPages} • Loop: ${loopMode.toUpperCase()} •` + played + upcoming });
 }
 
 export function addedToQueueEmbed(track: Track, position: number): EmbedBuilder {
@@ -48,7 +52,7 @@ export function errorEmbed(msg: string): EmbedBuilder {
     .setDescription(`Error: ${msg}`);
 }
 
-function formatDuration(seconds: number): string {
+export function formatDuration(seconds: number): string {
   const h = Math.floor(seconds / 3600);
   const m = Math.floor((seconds % 3600) / 60);
   const s = seconds % 60;

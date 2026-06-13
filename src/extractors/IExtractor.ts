@@ -14,4 +14,5 @@ export interface IExtractor {
   search(query: string): Promise<SearchResult[]>;
   getInfo(url: string): Promise<SearchResult>;
   stream(url: string): Promise<Readable>;
+  getPlaylist?(url: string): Promise<SearchResult[]>;
 }

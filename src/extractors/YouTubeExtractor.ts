@@ -31,9 +31,20 @@ const baseFlags = [
   '--no-playlist',
   '--no-warnings',
   '--extractor-retries', '3',
+  '--retry-sleep', '3',
   '--user-agent', 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/120.0.0.0 Safari/537.36',
   '--geo-bypass',
 ];
+
+function trackFromData(data: any): SearchResult {
+  return {
+    title: data.title ?? 'Unknown',
+    url: data.webpage_url ?? `https://youtube.com/watch?v=${data.id}`,
+    duration: data.duration ?? 0,
+    thumbnail: data.thumbnail ?? '',
+    source: Source.YouTube,
+  };
+}
 
 export class YouTubeExtractor implements IExtractor {
   readonly source = Source.YouTube;
@@ -42,47 +53,52 @@ export class YouTubeExtractor implements IExtractor {
     const { stdout } = await execYtDlp([
       `ytsearch5:${query}`,
       '--dump-json',
-      '--flat-playlist',
       ...baseFlags,
     ]);
-    return stdout.trim().split('\n').filter(Boolean).map((line) => {
-      const data = JSON.parse(line);
-      return {
-        title: data.title ?? 'Unknown',
-        url: data.webpage_url ?? `https://youtube.com/watch?v=${data.id}`,
-        duration: data.duration ?? 0,
-        thumbnail: data.thumbnail ?? '',
-        source: Source.YouTube,
-      };
-    });
+    return stdout.trim().split('\n').filter(Boolean).map(trackFromData);
   }
 
   async getInfo(url: string): Promise<SearchResult> {
     const { stdout } = await execYtDlp([
-      url,
-      '--dump-json',
+      url, '--dump-json',
       ...baseFlags,
     ]);
-    const data = JSON.parse(stdout);
-    return {
-      title: data.title ?? 'Unknown',
-      url: data.webpage_url ?? url,
-      duration: data.duration ?? 0,
-      thumbnail: data.thumbnail ?? '',
-      source: Source.YouTube,
-    };
+    return trackFromData(JSON.parse(stdout));
+  }
+
+  async getPlaylist(url: string): Promise<SearchResult[]> {
+    const { stdout } = await execYtDlp([
+      url, '--dump-json',
+      '--flat-playlist',
+      '--playlist-end', '50',
+      ...baseFlags,
+    ], 60000);
+    return stdout.trim().split('\n').filter(Boolean).map(trackFromData);
   }
 
   async stream(url: string): Promise<Readable> {
-    const { stdout } = await execYtDlp([
-      url, '-f', 'bestaudio[ext=m4a]/bestaudio/best', '--get-url',
+    const proc = spawn('yt-dlp', [
+      url, '-f', 'bestaudio[ext=m4a]/bestaudio/best',
+      '-o', '-',
+      '--sponsorblock-remove', 'sponsor,selfpromo',
       ...baseFlags,
-    ], 30000);
-    const streamUrl = stdout.trim();
-    if (!streamUrl) throw new Error('Could not extract stream URL');
+    ], { stdio: ['ignore', 'pipe', 'pipe'] });
 
-    const res = await fetch(streamUrl, { headers: { 'User-Agent': 'Mozilla/5.0 (Linux; Android 14) AppleWebKit/537.36 Chrome/120.0.6099.230 Mobile Safari/537.36' } });
-    if (!res.ok || !res.body) throw new Error(`Stream HTTP ${res.status}`);
-    return Readable.fromWeb(res.body as any);
+    let stderr = '';
+    proc.stderr.on('data', (d: Buffer) => { stderr += d.toString(); });
+
+    const stream = proc.stdout.on('close', () => proc.kill());
+
+    proc.on('close', (code) => {
+      if (code !== 0 && !stream.destroyed) {
+        stream.destroy(new Error(`yt-dlp exited ${code}: ${stderr.trim().split('\n').pop()}`));
+      }
+    });
+
+    proc.on('error', (err: NodeJS.ErrnoException) => {
+      if (!stream.destroyed) stream.destroy(err);
+    });
+
+    return stream;
   }
 }

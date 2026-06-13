@@ -6,6 +6,8 @@ export const ButtonId = {
   Stop: 'music_stop',
   Loop: 'music_loop',
   Shuffle: 'music_shuffle',
+  Suggest: 'music_suggest',
+  Favorite: 'music_favorite',
 } as const;
 
 export function nowPlayingButtons(paused: boolean, loopMode: string) {
@@ -35,7 +37,18 @@ export function nowPlayingButtons(paused: boolean, loopMode: string) {
     .setEmoji('🔀')
     .setStyle(ButtonStyle.Secondary);
 
+  const suggest = new ButtonBuilder()
+    .setCustomId(ButtonId.Suggest)
+    .setLabel('Suggested')
+    .setEmoji('💡')
+    .setStyle(ButtonStyle.Secondary);
+
+  const fav = new ButtonBuilder()
+    .setCustomId(ButtonId.Favorite)
+    .setEmoji('❤️')
+    .setStyle(ButtonStyle.Secondary);
+
   const row1 = new ActionRowBuilder<ButtonBuilder>().addComponents(playPause, skip, stop);
-  const row2 = new ActionRowBuilder<ButtonBuilder>().addComponents(loop, shuffle);
+  const row2 = new ActionRowBuilder<ButtonBuilder>().addComponents(fav, loop, shuffle, suggest);
   return [row1, row2];
 }

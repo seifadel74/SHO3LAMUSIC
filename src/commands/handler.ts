@@ -12,6 +12,9 @@ import {
   handleShuffle,
   handleRemove,
   handleJump,
+  handleSuggest,
+  handleFavorite,
+  handleStats,
 } from '../music/MusicService.js';
 import { logger } from '../core/Logger.js';
 
@@ -28,6 +31,9 @@ const handlers: Record<string, (i: ChatInputCommandInteraction) => Promise<void>
   shuffle: handleShuffle,
   remove: handleRemove,
   jump: handleJump,
+  suggest: handleSuggest,
+  favorite: handleFavorite,
+  stats: handleStats,
 };
 
 export async function handleInteraction(interaction: ChatInputCommandInteraction): Promise<void> {
