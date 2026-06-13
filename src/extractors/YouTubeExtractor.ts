@@ -27,6 +27,13 @@ function execYtDlp(args: string[], timeout = 20000): Promise<{ stdout: string; s
   });
 }
 
+import { existsSync } from 'fs';
+import { join, dirname } from 'path';
+import { fileURLToPath } from 'url';
+
+const cookiesPath = join(dirname(fileURLToPath(import.meta.url)), '..', '..', 'cookies.txt');
+const cookiesFlag = existsSync(cookiesPath) ? ['--cookies', cookiesPath] : [];
+
 const baseFlags = [
   '--no-playlist',
   '--no-warnings',
@@ -34,6 +41,8 @@ const baseFlags = [
   '--retry-sleep', '3',
   '--user-agent', 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/120.0.0.0 Safari/537.36',
   '--geo-bypass',
+  '--extractor-args', 'youtube:player-client=android',
+  ...cookiesFlag,
 ];
 
 function trackFromData(data: any): SearchResult {
