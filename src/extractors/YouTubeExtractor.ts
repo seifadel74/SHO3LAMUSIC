@@ -4,9 +4,27 @@ import type { IExtractor, SearchResult } from './IExtractor.js';
 import { stream, video_basic_info, playlist_info, setToken } from 'play-dl';
 import ytSearch from 'yt-search';
 
+const cookiesEnv = process.env.YOUTUBE_COOKIES;
+
 setToken({
-  useragent: ['Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/120.0.0.0 Safari/537.36'],
+  useragent: [
+    'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/120.0.0.0 Safari/537.36',
+  ],
+  ...(cookiesEnv ? { youtube: { cookie: cookiesEnv } } : {}),
 });
+
+async function retry<T>(fn: () => Promise<T>, retries = 3): Promise<T> {
+  for (let i = 0; i < retries; i++) {
+    try {
+      return await fn();
+    } catch (err) {
+      if (i === retries - 1) throw err;
+      const delay = (i + 1) * 2000;
+      await new Promise((r) => setTimeout(r, delay));
+    }
+  }
+  throw new Error('retry exhausted');
+}
 
 function trackFromData(v: { title?: string; url: string; durationInSec?: number; thumbnail?: string; thumbnails?: { url: string }[] }): SearchResult {
   return {
@@ -26,24 +44,24 @@ export class YouTubeExtractor implements IExtractor {
     return results.videos.slice(0, 5).map((v) => trackFromData({
       title: v.title,
       url: v.url,
-      durationInSec: v.duration.seconds,
+      durationInSec: v.seconds ?? 0,
       thumbnail: v.image,
     }));
   }
 
   async getInfo(url: string): Promise<SearchResult> {
-    const info = await video_basic_info(url);
+    const info = await retry(() => video_basic_info(url));
     return trackFromData(info.video_details);
   }
 
   async getPlaylist(url: string): Promise<SearchResult[]> {
-    const pl = await playlist_info(url);
+    const pl = await retry(() => playlist_info(url));
     const videos = await pl.all_videos();
     return videos.map((v) => trackFromData(v));
   }
 
   async stream(url: string): Promise<Readable> {
-    const result = await stream(url, { quality: 0 });
+    const result = await retry(() => stream(url, { quality: 0 }));
     return result.stream as Readable;
   }
 }
