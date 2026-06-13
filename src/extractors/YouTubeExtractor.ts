@@ -30,10 +30,19 @@ function execYtDlp(args: string[], timeout = 20000): Promise<{ stdout: string; s
 import { writeFileSync } from 'fs';
 import { join } from 'path';
 
+const UA = 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/120.0.0.0 Safari/537.36';
+
 const COOKIE_PATH = join('/tmp', 'youtube_cookies.txt');
 const cookieFlags: string[] = process.env.YOUTUBE_COOKIES
   ? (writeFileSync(COOKIE_PATH, process.env.YOUTUBE_COOKIES), ['--cookies', COOKIE_PATH])
   : [];
+
+const baseFlags = [
+  '--no-playlist', '--no-warnings',
+  '--extractor-retries', '3',
+  '--user-agent', UA,
+  ...cookieFlags,
+];
 
 export class YouTubeExtractor implements IExtractor {
   readonly source = Source.YouTube;
@@ -42,9 +51,8 @@ export class YouTubeExtractor implements IExtractor {
     const { stdout } = await execYtDlp([
       `ytsearch5:${query}`,
       '--dump-json',
-      '--no-playlist',
       '--flat-playlist',
-      '--no-warnings',
+      ...baseFlags,
     ]);
     return stdout.trim().split('\n').filter(Boolean).map((line) => {
       const data = JSON.parse(line);
@@ -62,8 +70,7 @@ export class YouTubeExtractor implements IExtractor {
     const { stdout } = await execYtDlp([
       url,
       '--dump-json',
-      '--no-playlist',
-      '--no-warnings',
+      ...baseFlags,
     ]);
     const data = JSON.parse(stdout);
     return {
@@ -77,12 +84,13 @@ export class YouTubeExtractor implements IExtractor {
 
   async stream(url: string): Promise<Readable> {
     const { stdout } = await execYtDlp([
-      ...cookieFlags, url, '-f', 'bestaudio', '--get-url', '--no-playlist', '--no-warnings',
+      url, '-f', 'bestaudio[ext=m4a]/bestaudio/best', '--get-url',
+      ...baseFlags,
     ], 30000);
     const streamUrl = stdout.trim();
     if (!streamUrl) throw new Error('Could not extract stream URL');
 
-    const res = await fetch(streamUrl);
+    const res = await fetch(streamUrl, { headers: { 'User-Agent': UA } });
     if (!res.ok || !res.body) throw new Error(`Stream HTTP ${res.status}`);
     return Readable.fromWeb(res.body as any);
   }

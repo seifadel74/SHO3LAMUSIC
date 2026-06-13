@@ -326,8 +326,8 @@ export async function handleJump(interaction: ChatInputCommandInteraction): Prom
 // --- Button Handler ---
 
 export async function handleButtonInteraction(interaction: ButtonInteraction): Promise<void> {
-  if (!interaction.guildId) { await interaction.deferUpdate(); return; }
-  await interaction.deferUpdate();
+  if (!interaction.guildId) { try { await interaction.deferUpdate(); } catch {} return; }
+  try { await interaction.deferUpdate(); } catch { return; }
   const guildId = interaction.guildId;
   const queue = getQueue(guildId);
   const player = getPlayer(guildId);
