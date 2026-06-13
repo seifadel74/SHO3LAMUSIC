@@ -15,6 +15,7 @@ import {
   handleSuggest,
   handleFavorite,
   handleStats,
+  handleHelp,
 } from '../music/MusicService.js';
 import { logger } from '../core/Logger.js';
 
@@ -34,6 +35,7 @@ const handlers: Record<string, (i: ChatInputCommandInteraction) => Promise<void>
   suggest: handleSuggest,
   favorite: handleFavorite,
   stats: handleStats,
+  help: handleHelp,
 };
 
 export async function handleInteraction(interaction: ChatInputCommandInteraction): Promise<void> {

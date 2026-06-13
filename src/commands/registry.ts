@@ -63,6 +63,9 @@ const commands = [
   new SlashCommandBuilder()
     .setName('stats')
     .setDescription('Show bot usage statistics'),
+  new SlashCommandBuilder()
+    .setName('help')
+    .setDescription('Show a list of available commands'),
 ];
 
 const rest = new REST({ version: '10' }).setToken(config.token);

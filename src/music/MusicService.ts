@@ -612,3 +612,40 @@ export async function handleButtonInteraction(interaction: ButtonInteraction): P
     }
   }
 }
+
+export async function handleHelp(interaction: ChatInputCommandInteraction): Promise<void> {
+  const embed = new EmbedBuilder()
+    .setTitle('🎵 Music Bot Commands')
+    .setColor(0x5865F2)
+    .addFields(
+      { name: '▶️ Playback', value: [
+        '`/play <query>` - Play a song, playlist, or search',
+        '`/skip` - Skip the current track',
+        '`/stop` - Stop playback and clear queue',
+        '`/pause` - Pause playback',
+        '`/resume` - Resume playback',
+        '`/volume <0-100>` - Set volume',
+        '`/loop <none|track|queue>` - Set loop mode',
+        '`/shuffle` - Shuffle the queue',
+        '`/nowplaying` - Show current track',
+      ].join('\n') },
+      { name: '📋 Queue', value: [
+        '`/queue` - Show the queue',
+        '`/remove <position>` - Remove a track',
+        '`/jump <position>` - Jump to a track',
+        '`/suggest` - Get suggestions for current track',
+      ].join('\n') },
+      { name: '❤️ Favorites', value: [
+        '`/favorite add` - Add current track to favorites',
+        '`/favorite list` - Show your favorites',
+        '`/favorite remove <index>` - Remove a favorite',
+      ].join('\n') },
+      { name: '📊 Other', value: [
+        '`/stats` - Show bot statistics',
+        '`/help` - Show this message',
+      ].join('\n') },
+    )
+    .setFooter({ text: 'Buttons in the player also control playback' });
+
+  await interaction.reply({ embeds: [embed] });
+}
