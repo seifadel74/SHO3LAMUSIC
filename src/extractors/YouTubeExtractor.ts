@@ -27,7 +27,9 @@ function execYtDlp(args: string[], timeout = 20000): Promise<{ stdout: string; s
   });
 }
 
-const cookieFlags: string[] = [];
+import { existsSync } from 'fs';
+
+const cookieFlags: string[] = existsSync('cookies.txt') ? ['--cookies', 'cookies.txt'] : [];
 
 export class YouTubeExtractor implements IExtractor {
   readonly source = Source.YouTube;
