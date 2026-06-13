@@ -37,7 +37,7 @@ export class Player {
     this.onFinish = cb;
   }
 
-  setOnError(cb: (err: Error) => void): void {
+  setOnError(cb: ((err: Error) => void) | null): void {
     this.onError = cb;
   }
 
