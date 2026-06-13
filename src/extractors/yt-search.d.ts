@@ -1,5 +1,5 @@
 declare module 'yt-search' {
-  interface VideoSearchResult {
+  interface VideoData {
     type: 'video';
     videoId: string;
     url: string;
@@ -12,15 +12,23 @@ declare module 'yt-search' {
     duration: { seconds: number; timestamp: string };
     ago: string;
     views: number;
-    author: { name: string; url: string };
+    author: { name: string; url: string; };
+  }
+
+  interface SearchOptions {
+    query?: string;
+    videoId?: string;
+    listId?: string;
   }
 
   interface SearchResult {
-    videos: VideoSearchResult[];
+    videos: VideoData[];
     playlists: any[];
     channels: any[];
     live: any[];
   }
 
-  export default function search(query: string): Promise<SearchResult>;
+  function search(query: string): Promise<SearchResult>;
+  function search(options: SearchOptions): Promise<VideoData>;
+  export default search;
 }
