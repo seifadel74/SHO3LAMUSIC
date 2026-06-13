@@ -27,9 +27,13 @@ function execYtDlp(args: string[], timeout = 20000): Promise<{ stdout: string; s
   });
 }
 
-import { existsSync } from 'fs';
+import { writeFileSync } from 'fs';
+import { join } from 'path';
 
-const cookieFlags: string[] = existsSync('cookies.txt') ? ['--cookies', 'cookies.txt'] : [];
+const COOKIE_PATH = join('/tmp', 'youtube_cookies.txt');
+const cookieFlags: string[] = process.env.YOUTUBE_COOKIES
+  ? (writeFileSync(COOKIE_PATH, process.env.YOUTUBE_COOKIES), ['--cookies', COOKIE_PATH])
+  : [];
 
 export class YouTubeExtractor implements IExtractor {
   readonly source = Source.YouTube;
