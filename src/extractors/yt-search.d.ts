@@ -15,10 +15,12 @@ declare module 'yt-search' {
     author: { name: string; url: string; };
   }
 
-  interface SearchOptions {
-    query?: string;
-    videoId?: string;
-    listId?: string;
+  interface PlaylistData {
+    title: string;
+    listId: string;
+    url: string;
+    videos: VideoData[];
+    videoCount: number;
   }
 
   interface SearchResult {
@@ -29,6 +31,7 @@ declare module 'yt-search' {
   }
 
   function search(query: string): Promise<SearchResult>;
-  function search(options: SearchOptions): Promise<VideoData>;
+  function search(options: { videoId: string }): Promise<VideoData>;
+  function search(options: { listId: string }): Promise<PlaylistData>;
   export default search;
 }
