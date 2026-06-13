@@ -31,8 +31,8 @@ const baseFlags = [
   '--no-playlist',
   '--no-warnings',
   '--extractor-retries', '3',
-  '--extractor-args', 'youtube:player_client=android&player_skip=webpage,configs',
-  '--user-agent', 'Mozilla/5.0 (Linux; Android 14) AppleWebKit/537.36 Chrome/120.0.6099.230 Mobile Safari/537.36',
+  '--user-agent', 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/120.0.0.0 Safari/537.36',
+  '--geo-bypass',
 ];
 
 export class YouTubeExtractor implements IExtractor {

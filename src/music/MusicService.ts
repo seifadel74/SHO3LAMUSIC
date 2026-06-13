@@ -171,44 +171,49 @@ async function playCurrent(interaction: ChatInputCommandInteraction, guildId: Sn
 
 export async function handlePlay(interaction: ChatInputCommandInteraction): Promise<void> {
   ensureInit();
-  const query = interaction.options.getString('query', true);
-  const member = interaction.member as GuildMember;
-  const voiceChannel = member.voice.channel;
-  if (!voiceChannel) {
-    await interaction.reply({ content: 'Join a voice channel first.', flags: MessageFlags.Ephemeral });
-    return;
-  }
 
-  const guildId = interaction.guildId!;
-  clearIdleTimer(guildId);
-  const queue = getQueue(guildId);
+  try {
+    const query = interaction.options.getString('query', true);
+    const member = interaction.member as GuildMember;
+    const voiceChannel = member.voice.channel;
+    if (!voiceChannel) {
+      await interaction.reply({ content: 'Join a voice channel first.', flags: MessageFlags.Ephemeral }).catch(() => {});
+      return;
+    }
 
-  await interaction.deferReply();
+    const guildId = interaction.guildId!;
+    clearIdleTimer(guildId);
+    const queue = getQueue(guildId);
 
-  connectToVoice(interaction.guild!, voiceChannel.id);
+    await interaction.deferReply().catch(() => {});
 
-  const extractor = getExtractor(query);
-  const result = isValidUrl(query)
-    ? await extractor.getInfo(query)
-    : (await extractor.search(query))[0];
+    connectToVoice(interaction.guild!, voiceChannel.id);
 
-  if (!result) {
-    await interaction.editReply({ content: 'No results found.' });
-    return;
-  }
+    const extractor = getExtractor(query);
+    const result = isValidUrl(query)
+      ? await extractor.getInfo(query)
+      : (await extractor.search(query))[0];
 
-  const track: Track = {
-    ...result,
-    stream: async () => extractor.stream(result.url),
-    requestedBy: interaction.user.tag,
-  };
+    if (!result) {
+      await interaction.editReply({ content: 'No results found.' }).catch(() => {});
+      return;
+    }
 
-  const pos = addTrackAndSave(queue, track);
-  await interaction.editReply({ content: `Added **${track.title}** — position #${pos}` });
+    const track: Track = {
+      ...result,
+      stream: async () => extractor.stream(result.url),
+      requestedBy: interaction.user.tag,
+    };
 
-  if (queue.tracks.length === 1) {
-    queue.currentIndex = 0;
-    await playCurrent(interaction, guildId);
+    const pos = addTrackAndSave(queue, track);
+    await interaction.editReply({ content: `Added **${track.title}** — position #${pos}` }).catch(() => {});
+
+    if (queue.tracks.length === 1) {
+      queue.currentIndex = 0;
+      await playCurrent(interaction, guildId);
+    }
+  } catch (err) {
+    logger.error('handlePlay error:', err);
   }
 }
 
