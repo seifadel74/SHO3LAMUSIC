@@ -118,7 +118,7 @@ export class YouTubeExtractor implements IExtractor {
 
   private ytArgs(extra = ''): string {
     const ytDlp = existsSync('yt-dlp') ? './yt-dlp' : 'yt-dlp';
-    return `${ytDlp} --no-warnings --cookies "${COOKIE_FILE}" --js-runtimes node ${extra}`;
+    return `${ytDlp} --no-warnings --cookies "${COOKIE_FILE}" --js-runtimes node --extractor-args youtube:player_client=android,mweb ${extra}`;
   }
 
   async getInfo(url: string): Promise<SearchResult> {
