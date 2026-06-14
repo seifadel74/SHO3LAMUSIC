@@ -12,6 +12,7 @@ export type LoopMode = (typeof LoopMode)[keyof typeof LoopMode];
 export enum Source {
   YouTube = 'youtube',
   SoundCloud = 'soundcloud',
+  Direct = 'direct',
 }
 
 export interface Track {

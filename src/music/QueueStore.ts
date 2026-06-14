@@ -2,7 +2,7 @@ import { mkdirSync, readFileSync, writeFileSync, existsSync } from 'fs';
 import { join, dirname } from 'path';
 import { fileURLToPath } from 'url';
 import { type GuildQueue, type GuildQueues, type Track, LoopMode, Source } from '../types.js';
-import { getExtractorForSource } from '../extractors/ExtractorRouter.js';
+import { getProvider } from '../extractors/ProviderRegistry.js';
 
 const dataDir = join(dirname(fileURLToPath(import.meta.url)), '..', '..', 'data');
 const filePath = join(dataDir, 'queues.json');
@@ -37,7 +37,7 @@ function toSerializable(track: Track): SerializableTrack {
 function toTrack(s: SerializableTrack): Track {
   return {
     ...s,
-    stream: async () => getExtractorForSource(s.source).stream(s.url),
+    stream: async () => getProvider(s.source).stream(s.url),
   };
 }
 

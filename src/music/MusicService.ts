@@ -27,7 +27,7 @@ import {
   deleteNowPlayingMessage,
   initQueues,
 } from './QueueManager.js';
-import { getExtractor, initExtractors, getExtractorForSource } from '../extractors/ExtractorRouter.js';
+import { resolveProvider, initProviders, getProvider, providerHealth } from '../extractors/ProviderRegistry.js';
 import { Track, Source } from '../types.js';
 import { isValidUrl } from '../utils/validation.js';
 import { logger } from '../core/Logger.js';
@@ -66,7 +66,8 @@ function startIdleTimer(guildId: Snowflake) {
 
 function ensureInit() {
   if (!initialized) {
-    initExtractors();
+    initProviders();
+    logger.info('Providers:', providerHealth());
     initQueues();
     loadFavorites();
     loadStats();
@@ -118,7 +119,7 @@ export async function handleSuggest(interaction: ChatInputCommandInteraction): P
   }
   await interaction.deferReply();
 
-  const extractor = getExtractorForSource(Source.YouTube);
+  const extractor = getProvider(Source.YouTube);
   const results = await extractor.search(track.title);
   if (!results.length) {
     await interaction.editReply({ content: 'No suggestions found.' }).catch(() => {});
@@ -291,7 +292,7 @@ export async function handlePlay(interaction: ChatInputCommandInteraction): Prom
 
     connectToVoice(interaction.guild!, voiceChannel.id);
 
-    const extractor = getExtractor(query);
+    const extractor = resolveProvider(query);
     const isPlaylist = isValidUrl(query) && /[?&]list=/.test(query);
 
     if (isPlaylist && extractor.getPlaylist) {
@@ -628,7 +629,7 @@ export async function handleButtonInteraction(interaction: ButtonInteraction): P
     case 'music_suggest': {
       const cur = queue.tracks[queue.currentIndex];
       if (!cur) break;
-      const ext = getExtractorForSource(Source.YouTube);
+      const ext = getProvider(Source.YouTube);
       const res = await ext.search(cur.title);
       if (!res.length) break;
       const sugTracks: Track[] = res.map((r) => ({ ...r, stream: () => ext.stream(r.url), requestedBy: '💡 Suggested' }));

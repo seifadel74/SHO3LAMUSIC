@@ -1,6 +1,6 @@
 import { Readable } from 'stream';
 import { Source } from '../types.js';
-import { IExtractor, SearchResult } from './IExtractor.js';
+import { IMusicProvider, SearchResult } from './IMusicProvider.js';
 import { config } from '../config.js';
 import { logger } from '../core/Logger.js';
 
@@ -30,7 +30,9 @@ async function scdlFetch<T>(path: string): Promise<T | null> {
   return res.json();
 }
 
-export class SoundCloudExtractor implements IExtractor {
+export class SoundCloudExtractor implements IMusicProvider {
+  readonly name = 'SoundCloud';
+  readonly enabled = true;
   readonly source = Source.SoundCloud;
 
   async search(query: string): Promise<SearchResult[]> {

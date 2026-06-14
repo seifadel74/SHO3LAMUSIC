@@ -9,8 +9,10 @@ export interface SearchResult {
   source: Source;
 }
 
-export interface IExtractor {
-  source: Source;
+export interface IMusicProvider {
+  readonly name: string;
+  readonly enabled: boolean;
+  readonly source: Source;
   search(query: string): Promise<SearchResult[]>;
   getInfo(url: string): Promise<SearchResult>;
   stream(url: string): Promise<Readable>;
