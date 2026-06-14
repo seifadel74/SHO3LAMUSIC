@@ -1,6 +1,6 @@
 import { Readable } from 'stream';
 import { spawn, execSync } from 'child_process';
-import { writeFileSync, existsSync, chmodSync, createWriteStream } from 'fs';
+import { writeFileSync, existsSync, chmodSync, createWriteStream, statSync } from 'fs';
 import { tmpdir } from 'os';
 import { join } from 'path';
 import { get } from 'https';
@@ -15,24 +15,54 @@ async function downloadYtDlp(): Promise<string> {
   const url = 'https://github.com/yt-dlp/yt-dlp/releases/latest/download/yt-dlp';
   await new Promise<void>((resolve, reject) => {
     const file = createWriteStream('yt-dlp');
-    get(url, (res) => { res.pipe(file); file.on('finish', () => { file.close(); resolve(); }); })
-      .on('error', reject);
+    file.on('error', reject);
+    const req = get(url, (res) => {
+      if (res.statusCode && res.statusCode >= 300 && res.headers.location) {
+        req.destroy();
+        const target = typeof res.headers.location === 'string' ? res.headers.location : res.headers.location[0];
+        get(target, (r2) => {
+          if (r2.statusCode && r2.statusCode >= 300 && r2.headers.location) {
+            r2.destroy();
+            const target2 = typeof r2.headers.location === 'string' ? r2.headers.location : r2.headers.location[0];
+            get(target2, (r3) => { r3.pipe(file); r3.on('end', () => { file.close(); resolve(); }); }).on('error', reject);
+            return;
+          }
+          r2.pipe(file);
+          r2.on('end', () => { file.close(); resolve(); });
+        }).on('error', reject);
+        return;
+      }
+      res.pipe(file);
+      res.on('end', () => { file.close(); resolve(); });
+    });
+    req.on('error', reject);
   });
+  const st = statSync('yt-dlp');
+  if (st.size < 500000) throw new Error(`yt-dlp too small (${st.size} bytes)`);
   chmodSync('yt-dlp', 0o755);
-  console.log('yt-dlp ready');
+  console.log(`yt-dlp ${(st.size/1024/1024).toFixed(1)} MB`);
   return './yt-dlp';
 }
 
+function getYtDlpBin(): string {
+  return existsSync('yt-dlp') ? './yt-dlp' : 'yt-dlp';
+}
+
 const YT_DLP_PROMISE = (async (): Promise<string> => {
-  if (process.platform === 'win32') return './yt-dlp';
-  const bin = existsSync('yt-dlp') ? './yt-dlp' : await downloadYtDlp();
+  if (process.platform === 'win32') return getYtDlpBin();
+  const bin = getYtDlpBin();
+  if (!existsSync(bin) || statSync(bin).size < 500000) {
+    await downloadYtDlp();
+    return './yt-dlp';
+  }
   try {
-    const ver = execSync(`${bin} --version`, { encoding: 'utf-8', timeout: 5000 }).trim();
+    const ver = execSync(`${bin} --version 2>&1`, { encoding: 'utf-8', timeout: 5000 }).trim();
     console.log(`yt-dlp ${ver}`);
   } catch (e) {
-    console.error('yt-dlp check failed:', (e as Error).message);
+    console.error('yt-dlp check failed, re-downloading...');
+    await downloadYtDlp();
   }
-  return bin;
+  return './yt-dlp';
 })();
 
 const FALLBACK_COOKIES = `# Netscape HTTP Cookie File
@@ -90,12 +120,9 @@ export class YouTubeExtractor implements IExtractor {
     const id = url.match(/(?:v=|youtu\.be\/|shorts\/)([a-zA-Z0-9_-]{11})/)?.[1];
     if (!id) throw new Error('Invalid YouTube URL');
     const ytDlp = await YT_DLP_PROMISE;
-    const json = JSON.parse(
-      execSync(
-        `${ytDlp} --dump-json --no-warnings --flat-playlist --cookies "${COOKIE_FILE}" "https://youtube.com/watch?v=${id}"`,
-        { encoding: 'utf-8', timeout: 15000 }
-      )
-    );
+    const cmd = `${ytDlp} --dump-json --no-warnings --flat-playlist --cookies "${COOKIE_FILE}" "https://youtube.com/watch?v=${id}" 2>&1`;
+    const out = execSync(cmd, { encoding: 'utf-8', timeout: 15000 });
+    const json = JSON.parse(out);
     return trackFromData({
       title: json.title,
       url: `https://youtube.com/watch?v=${id}`,
@@ -130,27 +157,29 @@ export class YouTubeExtractor implements IExtractor {
   async stream(url: string): Promise<Readable> {
     const ytDlp = await YT_DLP_PROMISE;
     const ffmpegPath = (await import('ffmpeg-static')).default;
-    const ytProc = spawn(ytDlp, [
-      '-f', 'bestaudio',
-      '-o', '-',
-      '--cookies', COOKIE_FILE,
-      '--no-warnings',
-      url,
-    ]);
-    const ffProc = spawn(ffmpegPath!, [
-      '-i', 'pipe:0',
-      '-f', 'opus',
-      '-ar', '48000',
-      '-ac', '2',
-      'pipe:1',
-    ]);
-    ytProc.stdout.pipe(ffProc.stdin);
-    ytProc.stderr.on('data', (d: Buffer) => console.log('[yt-dlp]', d.toString().trim()));
-    ffProc.stderr.on('data', (d: Buffer) => console.log('[ffmpeg]', d.toString().trim()));
-    ytProc.on('error', (e) => { console.error('[yt-dlp] error:', e.message); ytProc.kill(); ffProc.kill(); });
-    ffProc.on('error', (e) => { console.error('[ffmpeg] error:', e.message); ytProc.kill(); ffProc.kill(); });
-    ytProc.on('exit', (c) => console.log(`[yt-dlp] exited (${c})`));
-    ffProc.on('exit', (c) => console.log(`[ffmpeg] exited (${c})`));
-    return ffProc.stdout;
+    try {
+      const streamUrl = execSync(
+        `${ytDlp} -g -f bestaudio --cookies "${COOKIE_FILE}" "${url}" 2>&1`,
+        { encoding: 'utf-8', timeout: 20000 }
+      ).trim().split('\n')[0];
+      console.log(`Stream URL: ${streamUrl.slice(0, 80)}...`);
+      const ffProc = spawn(ffmpegPath!, [
+        '-reconnect', '1',
+        '-reconnect_streamed', '1',
+        '-reconnect_delay_max', '5',
+        '-i', streamUrl,
+        '-f', 'opus',
+        '-ar', '48000',
+        '-ac', '2',
+        'pipe:1',
+      ]);
+      ffProc.stderr.on('data', (d: Buffer) => console.log('[ffmpeg]', d.toString().trim()));
+      ffProc.on('error', (e) => console.error('[ffmpeg] error:', e.message));
+      ffProc.on('exit', (c) => console.log(`[ffmpeg] exited (${c})`));
+      return ffProc.stdout;
+    } catch (e) {
+      console.error('[stream] yt-dlp -g failed:', (e as Error).message);
+      throw e;
+    }
   }
 }
