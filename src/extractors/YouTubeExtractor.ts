@@ -121,17 +121,24 @@ export class YouTubeExtractor implements IExtractor {
 
   async stream(url: string): Promise<Readable> {
     const ytDlp = await YT_DLP_PROMISE;
-    const proc = spawn(ytDlp, [
-      '-f',
-      'bestaudio[ext=m4a]/bestaudio',
-      '-o',
-      '-',
-      '--cookies',
-      COOKIE_FILE,
+    const ffmpegPath = (await import('ffmpeg-static')).default;
+    const ytProc = spawn(ytDlp, [
+      '-f', 'bestaudio',
+      '-o', '-',
+      '--cookies', COOKIE_FILE,
       '--no-warnings',
       url,
     ]);
-    proc.on('error', () => proc.kill());
-    return proc.stdout;
+    const ffProc = spawn(ffmpegPath!, [
+      '-i', 'pipe:0',
+      '-f', 'opus',
+      '-ar', '48000',
+      '-ac', '2',
+      'pipe:1',
+    ]);
+    ytProc.stdout.pipe(ffProc.stdin);
+    ytProc.on('error', () => { ytProc.kill(); ffProc.kill(); });
+    ffProc.on('error', () => { ytProc.kill(); ffProc.kill(); });
+    return ffProc.stdout;
   }
 }
