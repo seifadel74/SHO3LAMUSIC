@@ -1,19 +1,20 @@
 import { Readable } from 'stream';
-import { spawn, execSync } from 'child_process';
-import { writeFileSync, existsSync, chmodSync, createWriteStream, statSync } from 'fs';
+import { spawn } from 'child_process';
+import { writeFileSync, existsSync } from 'fs';
 import { tmpdir } from 'os';
 import { join } from 'path';
-import { get } from 'https';
 import { Source } from '../types.js';
 import type { IExtractor, SearchResult } from './IExtractor.js';
 import ytSearch from 'yt-search';
 
-const BIN = './yt-dlp';
+// Use the system yt-dlp binary installed at build time (see Dockerfile)
+const BIN = 'yt-dlp';
 const COOKIE_FILE = join(tmpdir(), 'yt-cookies.txt');
 
 // ── Configuration from environment ──────────────────────────────────────────
 const CFG = {
-  userAgent: process.env.YT_USER_AGENT || 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/125.0.0.0 Safari/537.36',
+  userAgent: process.env.YT_USER_AGENT
+    || 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/125.0.0.0 Safari/537.36',
   clients: (process.env.YT_CLIENTS || 'web,mweb,ios,android,tv_embedded').split(','),
   retryDelay: parseInt(process.env.YT_RETRY_DELAY || '1000', 10),
   retryMax: parseInt(process.env.YT_RETRY_MAX || '3', 10),
@@ -28,59 +29,13 @@ const log = {
   error: (msg: string) => console.error(`[${new Date().toISOString()}] [YT] ${msg}`),
 };
 
-// ── yt-dlp binary download at startup ───────────────────────────────────────
-async function downloadYtDlp(): Promise<void> {
-  log.info('Downloading yt-dlp...');
-  const url = 'https://github.com/yt-dlp/yt-dlp/releases/latest/download/yt-dlp';
-  await new Promise<void>((resolve, reject) => {
-    const file = createWriteStream(BIN);
-    file.on('error', reject);
-    const req = get(url, (res) => {
-      if (res.statusCode && res.statusCode >= 300 && res.headers.location) {
-        const t = typeof res.headers.location === 'string' ? res.headers.location : res.headers.location[0];
-        get(t).on('error', reject).pipe(file).on('finish', () => { file.close(); resolve(); });
-        return;
-      }
-      res.pipe(file);
-      res.on('end', () => { file.close(); resolve(); });
-    });
-    req.on('error', reject);
-  });
-  const st = statSync(BIN);
-  if (st.size < 500000) throw new Error(`yt-dlp too small (${st.size} bytes)`);
-  chmodSync(BIN, 0o755);
-  log.info(`yt-dlp ${(st.size / 1024 / 1024).toFixed(1)} MB`);
-}
-
-const YT_READY = (async (): Promise<void> => {
-  if (process.platform === 'win32') return;
-  if (!existsSync(BIN) || statSync(BIN).size < 500000) await downloadYtDlp();
-  else {
-    try {
-      const v = execSync(`${BIN} --version 2>&1`, { encoding: 'utf-8', timeout: 5000 }).trim();
-      log.info(`yt-dlp ${v}`);
-    } catch {
-      log.warn('yt-dlp version check failed, re-downloading...');
-      await downloadYtDlp();
-    }
-  }
-  // Update yt-dlp on every start so we always have the latest
-  try {
-    execSync(`${BIN} --update-to stable 2>&1`, { encoding: 'utf-8', timeout: 30000 });
-    log.info('yt-dlp updated to latest');
-  } catch {
-    // ignored – binary update is optional
-  }
-})();
-
-// ── Cookie file setup (optional) ────────────────────────────────────────────
-function initCookieFile(): void {
-  if (existsSync(CFG.cookieFile)) return;
+// ── Cookie file setup (optional – runs once at module load) ──────────────────
+if (!existsSync(CFG.cookieFile)) {
   if (process.env.YOUTUBE_COOKIES) {
     writeFileSync(CFG.cookieFile, process.env.YOUTUBE_COOKIES, 'utf-8');
     log.info('Cookie file written from YOUTUBE_COOKIES env');
   }
-  // If no cookie source is available we continue without – yt-dlp degrades gracefully
+  // If no cookies source is available we continue without – yt-dlp degrades gracefully
 }
 
 // ── Error classification ────────────────────────────────────────────────────
@@ -140,7 +95,7 @@ function classifyError(stderr: string): YtErrorType {
   return YtErrorType.Unknown;
 }
 
-// ── Spawn wrapper that collects stdout/stderr ───────────────────────────────
+// ── Spawn wrapper – collects stdout/stderr, never blocks the event loop ─────
 function ytSpawn(args: string[], timeout = CFG.timeout): Promise<{ stdout: string; stderr: string }> {
   return new Promise((resolve, reject) => {
     const proc = spawn(BIN, args, { timeout });
@@ -159,13 +114,10 @@ function ytSpawn(args: string[], timeout = CFG.timeout): Promise<{ stdout: strin
 // ── Build yt-dlp argument array ────────────────────────────────────────────
 function ytArgs(client?: string): string[] {
   const args: string[] = ['--no-warnings', '--js-runtimes', 'node'];
-  // Optional cookies
   if (existsSync(CFG.cookieFile)) {
     args.push('--cookies', CFG.cookieFile);
   }
-  // Custom User-Agent
   args.push('--user-agent', CFG.userAgent);
-  // Extractor args – only add client if provided
   if (client) {
     args.push('--extractor-args', `youtube:player_client=${client}`);
   }
@@ -183,7 +135,7 @@ function trackFromData(v: { title?: string; url: string; durationInSec?: number;
   };
 }
 
-// ── Extract video ID from URL ───────────────────────────────────────────────
+// ── Extractors ──────────────────────────────────────────────────────────────
 const VIDEO_ID_RE = /(?:v=|youtu\.be\/|shorts\/)([a-zA-Z0-9_-]{11})/;
 const PLAYLIST_ID_RE = /list=([a-zA-Z0-9_-]+)/;
 
@@ -191,7 +143,7 @@ function extractVideoId(url: string): string | null {
   return url.match(VIDEO_ID_RE)?.[1] ?? null;
 }
 
-// ── Retry helper with client fallback ───────────────────────────────────────
+// ── Retry with exponential backoff across multiple clients ───────────────────
 async function runWithFallback<T>(fn: (client: string) => Promise<T>): Promise<T> {
   let lastError: Error | null = null;
   for (const client of CFG.clients) {
@@ -201,7 +153,7 @@ async function runWithFallback<T>(fn: (client: string) => Promise<T>): Promise<T
       } catch (err) {
         lastError = err as Error;
         const ytErr = err as YtError;
-        if (!ytErr.isTransient) throw err; // non-transient → abort immediately
+        if (!ytErr.isTransient) throw err;
         if (attempt < CFG.retryMax - 1) {
           const delay = CFG.retryDelay * Math.pow(2, attempt);
           log.warn(`${client} attempt ${attempt + 1} failed (${ytErr.type}), retrying in ${delay}ms`);
@@ -214,14 +166,12 @@ async function runWithFallback<T>(fn: (client: string) => Promise<T>): Promise<T
   throw lastError ?? new Error('All clients failed');
 }
 
-// Initialize cookie file at module load
-initCookieFile();
-
 // ── ──── EXTRACTOR ──────────────────────────────────────────────────────────
 
 export class YouTubeExtractor implements IExtractor {
   readonly source = Source.YouTube;
 
+  // Search uses yt-search (client-side, no yt-dlp needed)
   async search(query: string): Promise<SearchResult[]> {
     const results = await ytSearch(query);
     return results.videos.slice(0, 5).map((v) =>
@@ -229,7 +179,6 @@ export class YouTubeExtractor implements IExtractor {
     );
   }
 
-  // ── Validate that a URL looks like a YouTube video ────────────────────────
   validate(url: string): boolean {
     return VIDEO_ID_RE.test(url);
   }
@@ -238,7 +187,6 @@ export class YouTubeExtractor implements IExtractor {
   async getInfo(url: string): Promise<SearchResult> {
     const id = extractVideoId(url);
     if (!id) throw new Error('Invalid YouTube URL');
-    await YT_READY;
 
     return runWithFallback(async (client) => {
       const { stdout } = await ytSpawn([
@@ -256,16 +204,15 @@ export class YouTubeExtractor implements IExtractor {
     });
   }
 
-  // ── Fetch playlist ────────────────────────────────────────────────────────
+  // ── Fetch playlist tracks ─────────────────────────────────────────────────
   async getPlaylist(url: string): Promise<SearchResult[]> {
     const id = url.match(PLAYLIST_ID_RE)?.[1];
     if (!id) throw new Error('Invalid playlist URL');
-    await YT_READY;
 
     return runWithFallback(async (client) => {
       const { stdout } = await ytSpawn([
         ...ytArgs(client),
-        '--dump-json', '--flat-playlist', '--no-warnings',
+        '--dump-json', '--flat-playlist',
         url,
       ], 30000);
       return stdout
@@ -284,16 +231,13 @@ export class YouTubeExtractor implements IExtractor {
     });
   }
 
-  // ── Get audio stream ──────────────────────────────────────────────────────
+  // ── Stream audio ──────────────────────────────────────────────────────────
   async stream(url: string): Promise<Readable> {
-    await YT_READY;
-    // We already validated earlier, but be safe
     if (!this.validate(url)) throw new Error('Invalid YouTube URL');
 
     const ffmpegPath = (await import('ffmpeg-static')).default;
-    // Get the direct audio URL from yt-dlp, then pipe through ffmpeg
-    let streamUrl: string;
 
+    let streamUrl: string;
     try {
       streamUrl = await runWithFallback(async (client) => {
         const { stdout } = await ytSpawn([
@@ -308,10 +252,7 @@ export class YouTubeExtractor implements IExtractor {
     } catch (err) {
       const ytErr = err as YtError;
       log.error(`stream failed for ${url}: ${ytErr.userMessage}`);
-      // Return an empty readable stream so the caller doesn't crash,
-      // then schedule skip via the end event.
       const empty = new Readable({ read() { this.push(null); } });
-      // Attach metadata so the caller can show a user-friendly embed
       (empty as any)._ytError = ytErr.userMessage;
       return empty;
     }
@@ -330,7 +271,8 @@ export class YouTubeExtractor implements IExtractor {
 
     ffProc.stderr.on('data', (d: Buffer) => {
       const line = d.toString().trim();
-      if (line && !line.includes('ffmpeg version') && !line.includes('built with') && !line.includes('configuration') && !line.startsWith('lib')) {
+      if (line && !line.includes('ffmpeg version') && !line.includes('built with')
+        && !line.includes('configuration') && !line.startsWith('lib')) {
         log.info(`[ffmpeg] ${line}`);
       }
     });
