@@ -1,20 +1,31 @@
 import { Readable } from 'stream';
 import { spawn, execSync } from 'child_process';
-import { writeFileSync, existsSync, chmodSync } from 'fs';
+import { writeFileSync, existsSync, chmodSync, createWriteStream } from 'fs';
 import { tmpdir } from 'os';
 import { join } from 'path';
+import { get } from 'https';
 import { Source } from '../types.js';
 import type { IExtractor, SearchResult } from './IExtractor.js';
 import ytSearch from 'yt-search';
 
 const COOKIE_FILE = join(tmpdir(), 'yt-cookies.txt');
-const YT_DLP = process.platform === 'win32' || existsSync('yt-dlp') ? './yt-dlp' : (() => {
+
+async function downloadYtDlp(): Promise<string> {
   console.log('Downloading yt-dlp...');
-  execSync('curl -sL https://github.com/yt-dlp/yt-dlp/releases/latest/download/yt-dlp -o yt-dlp', { stdio: 'inherit' });
+  const url = 'https://github.com/yt-dlp/yt-dlp/releases/latest/download/yt-dlp';
+  await new Promise<void>((resolve, reject) => {
+    const file = createWriteStream('yt-dlp');
+    get(url, (res) => { res.pipe(file); file.on('finish', () => { file.close(); resolve(); }); })
+      .on('error', reject);
+  });
   chmodSync('yt-dlp', 0o755);
   console.log('yt-dlp ready');
   return './yt-dlp';
-})();
+}
+
+const YT_DLP_PROMISE = process.platform === 'win32' ? Promise.resolve('./yt-dlp')
+  : existsSync('yt-dlp') ? Promise.resolve('./yt-dlp')
+  : downloadYtDlp();
 
 const FALLBACK_COOKIES = `# Netscape HTTP Cookie File
 # This is a generated file! Do not edit.
@@ -70,9 +81,10 @@ export class YouTubeExtractor implements IExtractor {
   async getInfo(url: string): Promise<SearchResult> {
     const id = url.match(/(?:v=|youtu\.be\/|shorts\/)([a-zA-Z0-9_-]{11})/)?.[1];
     if (!id) throw new Error('Invalid YouTube URL');
+    const ytDlp = await YT_DLP_PROMISE;
     const json = JSON.parse(
       execSync(
-        `${YT_DLP} --dump-json --no-warnings --flat-playlist --cookies "${COOKIE_FILE}" "https://youtube.com/watch?v=${id}"`,
+        `${ytDlp} --dump-json --no-warnings --flat-playlist --cookies "${COOKIE_FILE}" "https://youtube.com/watch?v=${id}"`,
         { encoding: 'utf-8', timeout: 15000 }
       )
     );
@@ -87,8 +99,9 @@ export class YouTubeExtractor implements IExtractor {
   async getPlaylist(url: string): Promise<SearchResult[]> {
     const id = url.match(/list=([a-zA-Z0-9_-]+)/)?.[1];
     if (!id) throw new Error('Invalid playlist URL');
+    const ytDlp = await YT_DLP_PROMISE;
     const output = execSync(
-      `${YT_DLP} --dump-json --no-warnings --flat-playlist --cookies "${COOKIE_FILE}" "${url}"`,
+      `${ytDlp} --dump-json --no-warnings --flat-playlist --cookies "${COOKIE_FILE}" "${url}"`,
       { encoding: 'utf-8', timeout: 30000 }
     );
     return output
@@ -107,7 +120,8 @@ export class YouTubeExtractor implements IExtractor {
   }
 
   async stream(url: string): Promise<Readable> {
-    const proc = spawn(YT_DLP, [
+    const ytDlp = await YT_DLP_PROMISE;
+    const proc = spawn(ytDlp, [
       '-f',
       'bestaudio[ext=m4a]/bestaudio',
       '-o',
