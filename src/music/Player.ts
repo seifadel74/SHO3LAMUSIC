@@ -23,11 +23,25 @@ export class Player {
     });
 
     this.player.on(AudioPlayerStatus.Idle, () => {
+      logger.info('AudioPlayer -> Idle');
       this.currentResource = null;
       this.onFinish?.();
     });
 
+    this.player.on(AudioPlayerStatus.Playing, () => {
+      logger.info('AudioPlayer -> Playing');
+    });
+
+    this.player.on(AudioPlayerStatus.Paused, () => {
+      logger.info('AudioPlayer -> Paused');
+    });
+
+    this.player.on(AudioPlayerStatus.AutoPaused, () => {
+      logger.warn('AudioPlayer -> AutoPaused');
+    });
+
     this.player.on('error', (err) => {
+      logger.error('AudioPlayer error:', err.message);
       this.onError?.(err);
     });
   }

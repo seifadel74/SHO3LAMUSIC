@@ -23,9 +23,17 @@ async function downloadYtDlp(): Promise<string> {
   return './yt-dlp';
 }
 
-const YT_DLP_PROMISE = process.platform === 'win32' ? Promise.resolve('./yt-dlp')
-  : existsSync('yt-dlp') ? Promise.resolve('./yt-dlp')
-  : downloadYtDlp();
+const YT_DLP_PROMISE = (async (): Promise<string> => {
+  if (process.platform === 'win32') return './yt-dlp';
+  const bin = existsSync('yt-dlp') ? './yt-dlp' : await downloadYtDlp();
+  try {
+    const ver = execSync(`${bin} --version`, { encoding: 'utf-8', timeout: 5000 }).trim();
+    console.log(`yt-dlp ${ver}`);
+  } catch (e) {
+    console.error('yt-dlp check failed:', (e as Error).message);
+  }
+  return bin;
+})();
 
 const FALLBACK_COOKIES = `# Netscape HTTP Cookie File
 # This is a generated file! Do not edit.
@@ -137,8 +145,12 @@ export class YouTubeExtractor implements IExtractor {
       'pipe:1',
     ]);
     ytProc.stdout.pipe(ffProc.stdin);
-    ytProc.on('error', () => { ytProc.kill(); ffProc.kill(); });
-    ffProc.on('error', () => { ytProc.kill(); ffProc.kill(); });
+    ytProc.stderr.on('data', (d: Buffer) => console.log('[yt-dlp]', d.toString().trim()));
+    ffProc.stderr.on('data', (d: Buffer) => console.log('[ffmpeg]', d.toString().trim()));
+    ytProc.on('error', (e) => { console.error('[yt-dlp] error:', e.message); ytProc.kill(); ffProc.kill(); });
+    ffProc.on('error', (e) => { console.error('[ffmpeg] error:', e.message); ytProc.kill(); ffProc.kill(); });
+    ytProc.on('exit', (c) => console.log(`[yt-dlp] exited (${c})`));
+    ffProc.on('exit', (c) => console.log(`[ffmpeg] exited (${c})`));
     return ffProc.stdout;
   }
 }

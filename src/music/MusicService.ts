@@ -172,7 +172,7 @@ async function playTrackInternal(guildId: Snowflake, track: Track): Promise<void
   const queue = getQueue(guildId);
   const player = getPlayer(guildId);
   const connection = getConnection(guildId);
-  if (!connection) return;
+  if (!connection) { logger.warn('No connection in playTrackInternal'); return; }
 
   trackPlayed(track.duration, track.requestedBy);
   trackPlayedByUser(track.requestedBy, track.title, track.url, track.duration);
@@ -182,9 +182,13 @@ async function playTrackInternal(guildId: Snowflake, track: Track): Promise<void
   player.setOnError(onTrackEnd);
 
   try {
+    logger.info(`Starting stream for: ${track.title}`);
     const stream = await track.stream();
+    logger.info('Stream obtained, subscribing player to connection');
     player.subscribe(connection);
+    logger.info('Player subscribed, playing stream');
     player.play(stream, queue.volume);
+    logger.info('Play command issued');
 
     const { nowPlayingEmbed } = await import('../utils/embed.js');
     const embed = nowPlayingEmbed(track);
