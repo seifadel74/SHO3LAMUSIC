@@ -116,11 +116,15 @@ export class YouTubeExtractor implements IExtractor {
     );
   }
 
+  private ytArgs(extra = ''): string {
+    const ytDlp = existsSync('yt-dlp') ? './yt-dlp' : 'yt-dlp';
+    return `${ytDlp} --no-warnings --cookies "${COOKIE_FILE}" --js-runtimes node ${extra}`;
+  }
+
   async getInfo(url: string): Promise<SearchResult> {
     const id = url.match(/(?:v=|youtu\.be\/|shorts\/)([a-zA-Z0-9_-]{11})/)?.[1];
     if (!id) throw new Error('Invalid YouTube URL');
-    const ytDlp = await YT_DLP_PROMISE;
-    const cmd = `${ytDlp} --dump-json --no-warnings --flat-playlist --cookies "${COOKIE_FILE}" "https://youtube.com/watch?v=${id}" 2>&1`;
+    const cmd = `${this.ytArgs()} --dump-json --flat-playlist "https://youtube.com/watch?v=${id}"`;
     const out = execSync(cmd, { encoding: 'utf-8', timeout: 15000 });
     const json = JSON.parse(out);
     return trackFromData({
@@ -134,11 +138,8 @@ export class YouTubeExtractor implements IExtractor {
   async getPlaylist(url: string): Promise<SearchResult[]> {
     const id = url.match(/list=([a-zA-Z0-9_-]+)/)?.[1];
     if (!id) throw new Error('Invalid playlist URL');
-    const ytDlp = await YT_DLP_PROMISE;
-    const output = execSync(
-      `${ytDlp} --dump-json --no-warnings --flat-playlist --cookies "${COOKIE_FILE}" "${url}"`,
-      { encoding: 'utf-8', timeout: 30000 }
-    );
+    const cmd = `${this.ytArgs()} --dump-json --flat-playlist "${url}"`;
+    const output = execSync(cmd, { encoding: 'utf-8', timeout: 30000 });
     return output
       .trim()
       .split('\n')
@@ -155,14 +156,15 @@ export class YouTubeExtractor implements IExtractor {
   }
 
   async stream(url: string): Promise<Readable> {
-    const ytDlp = await YT_DLP_PROMISE;
+    await YT_DLP_PROMISE;
     const ffmpegPath = (await import('ffmpeg-static')).default;
     try {
       const streamUrl = execSync(
-        `${ytDlp} -g -f bestaudio --cookies "${COOKIE_FILE}" "${url}" 2>&1`,
+        `${this.ytArgs()} -g -f bestaudio "${url}"`,
         { encoding: 'utf-8', timeout: 20000 }
-      ).trim().split('\n')[0];
-      console.log(`Stream URL: ${streamUrl.slice(0, 80)}...`);
+      ).trim().split('\n').filter(l => l.startsWith('http'))[0];
+      console.log(`Stream URL: ${streamUrl?.slice(0, 80)}...`);
+      if (!streamUrl) throw new Error('No stream URL from yt-dlp');
       const ffProc = spawn(ffmpegPath!, [
         '-reconnect', '1',
         '-reconnect_streamed', '1',
@@ -173,12 +175,12 @@ export class YouTubeExtractor implements IExtractor {
         '-ac', '2',
         'pipe:1',
       ]);
-      ffProc.stderr.on('data', (d: Buffer) => console.log('[ffmpeg]', d.toString().trim()));
+      ffProc.stderr.on('data', (d: Buffer) => process.stdout.write(`[ffmpeg] ${d.toString().trim()}\n`));
       ffProc.on('error', (e) => console.error('[ffmpeg] error:', e.message));
       ffProc.on('exit', (c) => console.log(`[ffmpeg] exited (${c})`));
       return ffProc.stdout;
     } catch (e) {
-      console.error('[stream] yt-dlp -g failed:', (e as Error).message);
+      console.error('[stream] failed:', (e as Error).message);
       throw e;
     }
   }
