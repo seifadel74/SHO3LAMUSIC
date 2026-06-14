@@ -8,28 +8,37 @@ import { Source } from '../types.js';
 import type { IExtractor, SearchResult } from './IExtractor.js';
 import ytSearch from 'yt-search';
 
+const BIN = './yt-dlp';
 const COOKIE_FILE = join(tmpdir(), 'yt-cookies.txt');
 
-async function downloadYtDlp(): Promise<string> {
-  console.log('Downloading yt-dlp...');
+// ── Configuration from environment ──────────────────────────────────────────
+const CFG = {
+  userAgent: process.env.YT_USER_AGENT || 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/125.0.0.0 Safari/537.36',
+  clients: (process.env.YT_CLIENTS || 'web,mweb,ios,android,tv_embedded').split(','),
+  retryDelay: parseInt(process.env.YT_RETRY_DELAY || '1000', 10),
+  retryMax: parseInt(process.env.YT_RETRY_MAX || '3', 10),
+  timeout: parseInt(process.env.YT_TIMEOUT || '20000', 10),
+  cookieFile: process.env.YT_COOKIE_FILE || COOKIE_FILE,
+};
+
+// ── Logger with timestamps ──────────────────────────────────────────────────
+const log = {
+  info: (msg: string) => console.log(`[${new Date().toISOString()}] [YT] ${msg}`),
+  warn: (msg: string) => console.warn(`[${new Date().toISOString()}] [YT] ${msg}`),
+  error: (msg: string) => console.error(`[${new Date().toISOString()}] [YT] ${msg}`),
+};
+
+// ── yt-dlp binary download at startup ───────────────────────────────────────
+async function downloadYtDlp(): Promise<void> {
+  log.info('Downloading yt-dlp...');
   const url = 'https://github.com/yt-dlp/yt-dlp/releases/latest/download/yt-dlp';
   await new Promise<void>((resolve, reject) => {
-    const file = createWriteStream('yt-dlp');
+    const file = createWriteStream(BIN);
     file.on('error', reject);
     const req = get(url, (res) => {
       if (res.statusCode && res.statusCode >= 300 && res.headers.location) {
-        req.destroy();
-        const target = typeof res.headers.location === 'string' ? res.headers.location : res.headers.location[0];
-        get(target, (r2) => {
-          if (r2.statusCode && r2.statusCode >= 300 && r2.headers.location) {
-            r2.destroy();
-            const target2 = typeof r2.headers.location === 'string' ? r2.headers.location : r2.headers.location[0];
-            get(target2, (r3) => { r3.pipe(file); r3.on('end', () => { file.close(); resolve(); }); }).on('error', reject);
-            return;
-          }
-          r2.pipe(file);
-          r2.on('end', () => { file.close(); resolve(); });
-        }).on('error', reject);
+        const t = typeof res.headers.location === 'string' ? res.headers.location : res.headers.location[0];
+        get(t).on('error', reject).pipe(file).on('finish', () => { file.close(); resolve(); });
         return;
       }
       res.pipe(file);
@@ -37,67 +46,133 @@ async function downloadYtDlp(): Promise<string> {
     });
     req.on('error', reject);
   });
-  const st = statSync('yt-dlp');
+  const st = statSync(BIN);
   if (st.size < 500000) throw new Error(`yt-dlp too small (${st.size} bytes)`);
-  chmodSync('yt-dlp', 0o755);
-  console.log(`yt-dlp ${(st.size/1024/1024).toFixed(1)} MB`);
-  return './yt-dlp';
+  chmodSync(BIN, 0o755);
+  log.info(`yt-dlp ${(st.size / 1024 / 1024).toFixed(1)} MB`);
 }
 
-function getYtDlpBin(): string {
-  return existsSync('yt-dlp') ? './yt-dlp' : 'yt-dlp';
-}
-
-const YT_DLP_PROMISE = (async (): Promise<string> => {
-  if (process.platform === 'win32') return getYtDlpBin();
-  const bin = getYtDlpBin();
-  if (!existsSync(bin) || statSync(bin).size < 500000) {
-    await downloadYtDlp();
-    return './yt-dlp';
+const YT_READY = (async (): Promise<void> => {
+  if (process.platform === 'win32') return;
+  if (!existsSync(BIN) || statSync(BIN).size < 500000) await downloadYtDlp();
+  else {
+    try {
+      const v = execSync(`${BIN} --version 2>&1`, { encoding: 'utf-8', timeout: 5000 }).trim();
+      log.info(`yt-dlp ${v}`);
+    } catch {
+      log.warn('yt-dlp version check failed, re-downloading...');
+      await downloadYtDlp();
+    }
   }
+  // Update yt-dlp on every start so we always have the latest
   try {
-    const ver = execSync(`${bin} --version 2>&1`, { encoding: 'utf-8', timeout: 5000 }).trim();
-    console.log(`yt-dlp ${ver}`);
-  } catch (e) {
-    console.error('yt-dlp check failed, re-downloading...');
-    await downloadYtDlp();
+    execSync(`${BIN} --update-to stable 2>&1`, { encoding: 'utf-8', timeout: 30000 });
+    log.info('yt-dlp updated to latest');
+  } catch {
+    // ignored – binary update is optional
   }
-  return './yt-dlp';
 })();
 
-const FALLBACK_COOKIES = `# Netscape HTTP Cookie File
-# https://curl.haxx.se/rfc/cookie_spec.html
-# This is a generated file! Do not edit.
-
-.youtube.com	TRUE	/	TRUE	1815602770	LOGIN_INFO	AFmmF2swRAIgAinudWoYeF-wFOjTWUhZtaLU969GStF3ryZqG2TbWYoCIGF1EjzXX1YNRJ03K-6tFHbeeAN1uhs2J97GraZKztHg:QUQ3MjNmeXpZdFdfX0VSdHgwaDhLa2dJQk1FdzJFMFZPSFd0WDZlbWJTMms4Q3FCLUdSSjhvdUFiU1liQTE5TUtucm01ME9tdUZqeGJRV1dmblRfcmIzQm1hS0RwOFAwcS12VDlya20ydXZCQU5oV3JZSHlqMVFJZlJCRUVrSl9yV2piY1BzUVEzTS1nZzdBYmUteGRaTDlKRDJ3QkZqWTBR
-.youtube.com	TRUE	/	TRUE	1815956643	PREF	f6=40000000&tz=Africa.Cairo&f7=100
-.youtube.com	TRUE	/	FALSE	1815871193	SID	g.a000_Ahe9TRNNQBnh-hpfDkDoYz4MlePH8p8V-TPPpRWuRgfC9cLTln4CGPu6pN2skBV938mugACgYKAXUSARESFQHGX2MiN8p7d1tnq9Xu3BO6eVawdRoVAUF8yKoBOikfzO9NGgOpLmQPJO0A0076
-.youtube.com	TRUE	/	TRUE	1815871193	__Secure-1PSID	g.a000_Ahe9TRNNQBnh-hpfDkDoYz4MlePH8p8V-TPPpRWuRgfC9cLDDl9V-IWDKTfIzCweJpXIAACgYKAYkSARESFQHGX2MiUlMKR7j7Y-k-oDb-UnmtQBoVAUF8yKrHo7ICXzLl4n50Tkfldegy0076
-.youtube.com	TRUE	/	TRUE	1815871193	__Secure-3PSID	g.a000_Ahe9TRNNQBnh-hpfDkDoYz4MlePH8p8V-TPPpRWuRgfC9cLENnr1XIBdtbn8nvCZsq81AACgYKASASARESFQHGX2MiSyg26Jo2pUS4INpYJQPXVhoVAUF8yKpW-sIkuXZ7C1SuJEWYrtE20076
-.youtube.com	TRUE	/	FALSE	1815871193	HSID	AxOa9NHuEcT3e2HOL
-.youtube.com	TRUE	/	TRUE	1815871193	SSID	Aia8GePKgZqAdDN_3
-.youtube.com	TRUE	/	FALSE	1815871193	APISID	wjNmlgYTAbyBClCf/AJHAS4MpMuJbR72yQ
-.youtube.com	TRUE	/	TRUE	1815871193	SAPISID	8vJi7--M1FaT8Cx8/AVwHKT_OeAvMvNUs1
-.youtube.com	TRUE	/	TRUE	1815871193	__Secure-1PAPISID	8vJi7--M1FaT8Cx8/AVwHKT_OeAvMvNUs1
-.youtube.com	TRUE	/	TRUE	1815871193	__Secure-3PAPISID	8vJi7--M1FaT8Cx8/AVwHKT_OeAvMvNUs1
-.youtube.com	TRUE	/	FALSE	1781396646	ST-tladcw	session_logininfo=AFmmF2swRAIgAinudWoYeF-wFOjTWUhZtaLU969GStF3ryZqG2TbWYoCIGF1EjzXX1YNRJ03K-6tFHbeeAN1uhs2J97GraZKztHg%3AQUQ3MjNmeXpZdFdfX0VSdHgwaDhLa2dJQk1FdzJFMFZPSFd0WDZlbWJTMms4Q3FCLUdSSjhvdUFiU1liQTE5TUtucm01ME9tdUZqeGJRV1dmblRfcmIzQm1hS0RwOFAwcS12VDlya20ydXZCQU5oV3JZSHlqMVFJZlJCRUVrSl9yV2piY1BzUVEzTS1nZzdBYmUteGRaTDlKRDJ3QkZqWTBR
-.youtube.com	TRUE	/	FALSE	1781396648	ST-xuwub9	session_logininfo=AFmmF2swRAIgAinudWoYeF-wFOjTWUhZtaLU969GStF3ryZqG2TbWYoCIGF1EjzXX1YNRJ03K-6tFHbeeAN1uhs2J97GraZKztHg%3AQUQ3MjNmeXpZdFdfX0VSdHgwaDhLa2dJQk1FdzJFMFZPSFd0WDZlbWJTMms4Q3FCLUdSSjhvdUFiU1liQTE5TUtucm01ME9tdUZqeGJRV1dmblRfcmIzQm1hS0RwOFAwcS12VDlya20ydXZCQU5oV3JZSHlqMVFJZlJCRUVrSl9yV2piY1BzUVEzTS1nZzdBYmUteGRaTDlKRDJ3QkZqWTBR
-.youtube.com	TRUE	/	FALSE	1781396648	ST-3opvp5	session_logininfo=AFmmF2swRAIgAinudWoYeF-wFOjTWUhZtaLU969GStF3ryZqG2TbWYoCIGF1EjzXX1YNRJ03K-6tFHbeeAN1uhs2J97GraZKztHg%3AQUQ3MjNmeXpZdFdfX0VSdHgwaDhLa2dJQk1FdzJFMFZPSFd0WDZlbWJTMms4Q3FCLUdSSjhvdUFiU1liQTE5TUtucm01ME9tdUZqeGJRV1dmblRfcmIzQm1hS0RwOFAwcS12VDlya20ydXZCQU5oV3JZSHlqMVFJZlJCRUVrSl9yV2piY1BzUVEzTS1nZzdBYmUteGRaTDlKRDJ3QkZqWTBR
-.youtube.com	TRUE	/	TRUE	1812929785	__Secure-1PSIDTS	sidts-CjUByojQU7i_tMM4eo1fDnq4nqTENfZy8NnkwEoLCFw5sbtIsPcpS9hMY8apls13M7NqTjJKURAA
-.youtube.com	TRUE	/	TRUE	1812929785	__Secure-3PSIDTS	sidts-CjUByojQU7i_tMM4eo1fDnq4nqTENfZy8NnkwEoLCFw5sbtIsPcpS9hMY8apls13M7NqTjJKURAA
-.youtube.com	TRUE	/	FALSE	1812932645	SIDCC	AKEyXzXfAV8r8-V7F7zGedDPM_S_WOI5v7nPO0r6Mur9y3fFWU9Xaqm18JAxz306WGmg9YwVZCI
-.youtube.com	TRUE	/	TRUE	1812932645	__Secure-1PSIDCC	AKEyXzXQZekVLBOPxRJBNu98-cdpY8a7d4Rssj0a_2v4CD__yVrhXKe5t_qYGn5cppghd5IyQJ8
-.youtube.com	TRUE	/	TRUE	1812932645	__Secure-3PSIDCC	AKEyXzW5j79PcmZrfxBusjsIMg6LI7xCGFpW-4eaXWEyzjP7nXWu5UPbcFYgQcJc6L2O7Fu_OA
-.youtube.com	TRUE	/	TRUE	1796948639	VISITOR_INFO1_LIVE	8fVLVENxV8s
-.youtube.com	TRUE	/	TRUE	1796948639	VISITOR_PRIVACY_METADATA	CgJFRxIEGgAgWg%3D%3D
-.youtube.com	TRUE	/	TRUE	1796869534	__Secure-YNID	19.YT=at_aH11kyRCnHhygz4HwHy-cmagvJLKve9kB3pMv0R-m_Ob2KzXYHRLS1CjE6yddsZS1lHGMOVuqO98JO-LdIp2rlLb7ukahgLbkfisuW9IiU12C9Nf061QpENYr2DfPQ8oKA-401GjDTxMyJW8VSeOtJP9rd0aYP45fSlYEUUkgh0YSJvqWhr8WK_xwju_lAJxd72HJXUyvYxMNUnCvGKSEICARj0juqdm9aRuiyCAe_B5SfFopYAIfE1VMZaG1Bzn6CBHLLqLi8LbOJ62xOYbQN6W4F8Lrnf6z9AgvDIkCRYr65Xr5UwkZ59VirdcM448-unAxNukE81gGlxlzYA
-.youtube.com	TRUE	/	TRUE	1796869534	__Secure-ROLLOUT_TOKEN	CPGF87n9mv_IEBDfhYbzs_uUAxjRsKL3lIOVAw%3D%3D
-.youtube.com	TRUE	/	TRUE	0	YSC	TDrBRnZ8Q2o`;
-
-if (!existsSync(COOKIE_FILE)) {
-  writeFileSync(COOKIE_FILE, process.env.YOUTUBE_COOKIES || FALLBACK_COOKIES, 'utf-8');
+// ── Cookie file setup (optional) ────────────────────────────────────────────
+function initCookieFile(): void {
+  if (existsSync(CFG.cookieFile)) return;
+  if (process.env.YOUTUBE_COOKIES) {
+    writeFileSync(CFG.cookieFile, process.env.YOUTUBE_COOKIES, 'utf-8');
+    log.info('Cookie file written from YOUTUBE_COOKIES env');
+  }
+  // If no cookie source is available we continue without – yt-dlp degrades gracefully
 }
 
+// ── Error classification ────────────────────────────────────────────────────
+enum YtErrorType {
+  BotDetection = 'bot_detection',
+  Http403 = 'http_403',
+  Http429 = 'http_429',
+  Unavailable = 'unavailable',
+  Private = 'private',
+  Unknown = 'unknown',
+}
+
+class YtError extends Error {
+  type: YtErrorType;
+  stdout: string;
+  stderr: string;
+  exitCode: number | null;
+
+  constructor(msg: string, stderr: string, exitCode: number | null, stdout = '') {
+    super(msg);
+    this.stderr = stderr;
+    this.stdout = stdout;
+    this.exitCode = exitCode;
+    this.type = classifyError(stderr);
+  }
+
+  get isTransient(): boolean {
+    return this.type === YtErrorType.BotDetection
+      || this.type === YtErrorType.Http403
+      || this.type === YtErrorType.Http429;
+  }
+
+  get userMessage(): string {
+    switch (this.type) {
+      case YtErrorType.BotDetection:
+        return 'YouTube is blocking server requests. Try again later or update cookies.';
+      case YtErrorType.Http403:
+        return 'Access forbidden. This video may be restricted.';
+      case YtErrorType.Http429:
+        return 'Too many requests. Please wait a moment and try again.';
+      case YtErrorType.Unavailable:
+        return 'This video is unavailable.';
+      case YtErrorType.Private:
+        return 'This video is private.';
+      default:
+        return 'Unable to stream this YouTube video. Please try another link.';
+    }
+  }
+}
+
+function classifyError(stderr: string): YtErrorType {
+  if (/Sign in to confirm/i.test(stderr)) return YtErrorType.BotDetection;
+  if (/HTTP Error 403/i.test(stderr)) return YtErrorType.Http403;
+  if (/HTTP Error 429/i.test(stderr)) return YtErrorType.Http429;
+  if (/Video unavailable/i.test(stderr)) return YtErrorType.Unavailable;
+  if (/Private video/i.test(stderr)) return YtErrorType.Private;
+  return YtErrorType.Unknown;
+}
+
+// ── Spawn wrapper that collects stdout/stderr ───────────────────────────────
+function ytSpawn(args: string[], timeout = CFG.timeout): Promise<{ stdout: string; stderr: string }> {
+  return new Promise((resolve, reject) => {
+    const proc = spawn(BIN, args, { timeout });
+    let stdout = '';
+    let stderr = '';
+    proc.stdout.on('data', (d: Buffer) => { stdout += d.toString(); });
+    proc.stderr.on('data', (d: Buffer) => { stderr += d.toString(); });
+    proc.on('error', (e: Error) => reject(new YtError(e.message, stderr, null, stdout)));
+    proc.on('close', (code) => {
+      if (code === 0) resolve({ stdout, stderr });
+      else reject(new YtError(`exit code ${code}`, stderr, code, stdout));
+    });
+  });
+}
+
+// ── Build yt-dlp argument array ────────────────────────────────────────────
+function ytArgs(client?: string): string[] {
+  const args: string[] = ['--no-warnings', '--js-runtimes', 'node'];
+  // Optional cookies
+  if (existsSync(CFG.cookieFile)) {
+    args.push('--cookies', CFG.cookieFile);
+  }
+  // Custom User-Agent
+  args.push('--user-agent', CFG.userAgent);
+  // Extractor args – only add client if provided
+  if (client) {
+    args.push('--extractor-args', `youtube:player_client=${client}`);
+  }
+  return args;
+}
+
+// ── Search result helper ────────────────────────────────────────────────────
 function trackFromData(v: { title?: string; url: string; durationInSec?: number; thumbnail?: string }): SearchResult {
   return {
     title: v.title ?? 'Unknown',
@@ -107,6 +182,42 @@ function trackFromData(v: { title?: string; url: string; durationInSec?: number;
     source: Source.YouTube,
   };
 }
+
+// ── Extract video ID from URL ───────────────────────────────────────────────
+const VIDEO_ID_RE = /(?:v=|youtu\.be\/|shorts\/)([a-zA-Z0-9_-]{11})/;
+const PLAYLIST_ID_RE = /list=([a-zA-Z0-9_-]+)/;
+
+function extractVideoId(url: string): string | null {
+  return url.match(VIDEO_ID_RE)?.[1] ?? null;
+}
+
+// ── Retry helper with client fallback ───────────────────────────────────────
+async function runWithFallback<T>(fn: (client: string) => Promise<T>): Promise<T> {
+  let lastError: Error | null = null;
+  for (const client of CFG.clients) {
+    for (let attempt = 0; attempt < CFG.retryMax; attempt++) {
+      try {
+        return await fn(client);
+      } catch (err) {
+        lastError = err as Error;
+        const ytErr = err as YtError;
+        if (!ytErr.isTransient) throw err; // non-transient → abort immediately
+        if (attempt < CFG.retryMax - 1) {
+          const delay = CFG.retryDelay * Math.pow(2, attempt);
+          log.warn(`${client} attempt ${attempt + 1} failed (${ytErr.type}), retrying in ${delay}ms`);
+          await new Promise((r) => setTimeout(r, delay));
+        }
+      }
+    }
+    log.warn(`${client} exhausted, trying next client`);
+  }
+  throw lastError ?? new Error('All clients failed');
+}
+
+// Initialize cookie file at module load
+initCookieFile();
+
+// ── ──── EXTRACTOR ──────────────────────────────────────────────────────────
 
 export class YouTubeExtractor implements IExtractor {
   readonly source = Source.YouTube;
@@ -118,72 +229,115 @@ export class YouTubeExtractor implements IExtractor {
     );
   }
 
-  private ytArgs(extra = ''): string {
-    const ytDlp = existsSync('yt-dlp') ? './yt-dlp' : 'yt-dlp';
-    return `${ytDlp} --no-warnings --cookies "${COOKIE_FILE}" --js-runtimes node --extractor-args youtube:player_client=android,mweb ${extra}`;
+  // ── Validate that a URL looks like a YouTube video ────────────────────────
+  validate(url: string): boolean {
+    return VIDEO_ID_RE.test(url);
   }
 
+  // ── Fetch video metadata ──────────────────────────────────────────────────
   async getInfo(url: string): Promise<SearchResult> {
-    const id = url.match(/(?:v=|youtu\.be\/|shorts\/)([a-zA-Z0-9_-]{11})/)?.[1];
+    const id = extractVideoId(url);
     if (!id) throw new Error('Invalid YouTube URL');
-    const cmd = `${this.ytArgs()} --dump-json --flat-playlist "https://youtube.com/watch?v=${id}"`;
-    const out = execSync(cmd, { encoding: 'utf-8', timeout: 15000 });
-    const json = JSON.parse(out);
-    return trackFromData({
-      title: json.title,
-      url: `https://youtube.com/watch?v=${id}`,
-      durationInSec: json.duration ?? 0,
-      thumbnail: json.thumbnail ?? '',
+    await YT_READY;
+
+    return runWithFallback(async (client) => {
+      const { stdout } = await ytSpawn([
+        ...ytArgs(client),
+        '--dump-json', '--flat-playlist',
+        `https://youtube.com/watch?v=${id}`,
+      ]);
+      const json = JSON.parse(stdout);
+      return trackFromData({
+        title: json.title,
+        url: `https://youtube.com/watch?v=${id}`,
+        durationInSec: json.duration ?? 0,
+        thumbnail: json.thumbnail ?? '',
+      });
     });
   }
 
+  // ── Fetch playlist ────────────────────────────────────────────────────────
   async getPlaylist(url: string): Promise<SearchResult[]> {
-    const id = url.match(/list=([a-zA-Z0-9_-]+)/)?.[1];
+    const id = url.match(PLAYLIST_ID_RE)?.[1];
     if (!id) throw new Error('Invalid playlist URL');
-    const cmd = `${this.ytArgs()} --dump-json --flat-playlist "${url}"`;
-    const output = execSync(cmd, { encoding: 'utf-8', timeout: 30000 });
-    return output
-      .trim()
-      .split('\n')
-      .slice(0, 50)
-      .map((line) => {
-        const v = JSON.parse(line);
-        return trackFromData({
-          title: v.title,
-          url: `https://youtube.com/watch?v=${v.id}`,
-          durationInSec: v.duration ?? 0,
-          thumbnail: v.thumbnail ?? '',
+    await YT_READY;
+
+    return runWithFallback(async (client) => {
+      const { stdout } = await ytSpawn([
+        ...ytArgs(client),
+        '--dump-json', '--flat-playlist', '--no-warnings',
+        url,
+      ], 30000);
+      return stdout
+        .trim()
+        .split('\n')
+        .slice(0, 50)
+        .map((line) => {
+          const v = JSON.parse(line);
+          return trackFromData({
+            title: v.title,
+            url: `https://youtube.com/watch?v=${v.id}`,
+            durationInSec: v.duration ?? 0,
+            thumbnail: v.thumbnail ?? '',
+          });
         });
-      });
+    });
   }
 
+  // ── Get audio stream ──────────────────────────────────────────────────────
   async stream(url: string): Promise<Readable> {
-    await YT_DLP_PROMISE;
+    await YT_READY;
+    // We already validated earlier, but be safe
+    if (!this.validate(url)) throw new Error('Invalid YouTube URL');
+
     const ffmpegPath = (await import('ffmpeg-static')).default;
+    // Get the direct audio URL from yt-dlp, then pipe through ffmpeg
+    let streamUrl: string;
+
     try {
-      const streamUrl = execSync(
-        `${this.ytArgs()} -g -f bestaudio "${url}"`,
-        { encoding: 'utf-8', timeout: 20000 }
-      ).trim().split('\n').filter(l => l.startsWith('http'))[0];
-      console.log(`Stream URL: ${streamUrl?.slice(0, 80)}...`);
-      if (!streamUrl) throw new Error('No stream URL from yt-dlp');
-      const ffProc = spawn(ffmpegPath!, [
-        '-reconnect', '1',
-        '-reconnect_streamed', '1',
-        '-reconnect_delay_max', '5',
-        '-i', streamUrl,
-        '-f', 'opus',
-        '-ar', '48000',
-        '-ac', '2',
-        'pipe:1',
-      ]);
-      ffProc.stderr.on('data', (d: Buffer) => process.stdout.write(`[ffmpeg] ${d.toString().trim()}\n`));
-      ffProc.on('error', (e) => console.error('[ffmpeg] error:', e.message));
-      ffProc.on('exit', (c) => console.log(`[ffmpeg] exited (${c})`));
-      return ffProc.stdout;
-    } catch (e) {
-      console.error('[stream] failed:', (e as Error).message);
-      throw e;
+      streamUrl = await runWithFallback(async (client) => {
+        const { stdout } = await ytSpawn([
+          ...ytArgs(client),
+          '-g', '-f', 'bestaudio',
+          url,
+        ]);
+        const match = stdout.trim().split('\n').filter((l) => l.startsWith('http'));
+        if (!match.length) throw new Error('No stream URL returned');
+        return match[0];
+      });
+    } catch (err) {
+      const ytErr = err as YtError;
+      log.error(`stream failed for ${url}: ${ytErr.userMessage}`);
+      // Return an empty readable stream so the caller doesn't crash,
+      // then schedule skip via the end event.
+      const empty = new Readable({ read() { this.push(null); } });
+      // Attach metadata so the caller can show a user-friendly embed
+      (empty as any)._ytError = ytErr.userMessage;
+      return empty;
     }
+
+    log.info(`Stream URL resolved (${streamUrl.length} chars)`);
+    const ffProc = spawn(ffmpegPath!, [
+      '-reconnect', '1',
+      '-reconnect_streamed', '1',
+      '-reconnect_delay_max', '5',
+      '-i', streamUrl,
+      '-f', 'opus',
+      '-ar', '48000',
+      '-ac', '2',
+      'pipe:1',
+    ]);
+
+    ffProc.stderr.on('data', (d: Buffer) => {
+      const line = d.toString().trim();
+      if (line && !line.includes('ffmpeg version') && !line.includes('built with') && !line.includes('configuration') && !line.startsWith('lib')) {
+        log.info(`[ffmpeg] ${line}`);
+      }
+    });
+
+    ffProc.on('error', (e) => log.error(`ffmpeg error: ${e.message}`));
+    ffProc.on('exit', (c) => log.info(`ffmpeg exited (${c})`));
+
+    return ffProc.stdout;
   }
 }

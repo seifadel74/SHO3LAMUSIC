@@ -184,6 +184,21 @@ async function playTrackInternal(guildId: Snowflake, track: Track): Promise<void
   try {
     logger.info(`Starting stream for: ${track.title}`);
     const stream = await track.stream();
+    const ytError = (stream as any)._ytError;
+    if (ytError) {
+      logger.warn(`Stream unavailable for ${track.title}: ${ytError}`);
+      const channel = await getSendChannel(null, guildId);
+      if (channel) {
+        const embed = new EmbedBuilder()
+          .setColor(0xed4245)
+          .setTitle('⚠️ Playback Error')
+          .setDescription(ytError)
+          .setFooter({ text: track.title });
+        await channel.send({ embeds: [embed] });
+      }
+      await setUpNextTrack(guildId);
+      return;
+    }
     logger.info('Stream obtained, subscribing player to connection');
     player.subscribe(connection);
     logger.info('Player subscribed, playing stream');
@@ -222,6 +237,21 @@ async function playCurrent(interaction: ChatInputCommandInteraction, guildId: Sn
 
   try {
     const stream = await track.stream();
+    const ytError = (stream as any)._ytError;
+    if (ytError) {
+      logger.warn(`Stream unavailable for ${track.title}: ${ytError}`);
+      const channel = interaction.channel as TextChannel | NewsChannel | ThreadChannel;
+      if (channel?.send) {
+        const embed = new EmbedBuilder()
+          .setColor(0xed4245)
+          .setTitle('⚠️ Playback Error')
+          .setDescription(ytError)
+          .setFooter({ text: track.title });
+        await channel.send({ embeds: [embed] });
+      }
+      await setUpNextTrack(guildId);
+      return;
+    }
     player.subscribe(connection);
     player.play(stream, queue.volume);
 

@@ -15,4 +15,5 @@ export interface IExtractor {
   getInfo(url: string): Promise<SearchResult>;
   stream(url: string): Promise<Readable>;
   getPlaylist?(url: string): Promise<SearchResult[]>;
+  validate?(url: string): boolean;
 }
