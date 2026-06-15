@@ -157,13 +157,7 @@ function ytArgs(): string[] {
 function ytArgsWithCookies(): string[] {
   const args = ytArgs();
   if (cookieFileValid()) {
-    const header = readFileSync(COOKIE_FILE, 'utf-8')
-      .split('\n')
-      .filter(l => l.trim() && !l.startsWith('#'))
-      .map(l => { const p = l.split('\t'); return p.length >= 7 ? `${p[5]}=${p[6]}` : ''; })
-      .filter(Boolean)
-      .join('; ');
-    args.push('--add-header', `Cookie: ${header}`);
+    args.push('--cookies', COOKIE_FILE);
   }
   return args;
 }
@@ -263,7 +257,7 @@ export class YouTubeExtractor implements IMusicProvider {
     // Strategy 1: yt-dlp directly to YouTube with cookies
     if (cookieFileValid()) {
       log.info('Trying direct YouTube stream with cookies');
-      return pipeOutput([...ytArgsWithCookies(), '-f', 'bestaudio', '-o', '-', url]);
+      return pipeOutput([...ytArgsWithCookies(), '-f', 'bestaudio/best', '-o', '-', url]);
     }
 
     // Strategy 2: Fallback to Invidious
@@ -276,18 +270,13 @@ export class YouTubeExtractor implements IMusicProvider {
 
     let lastErr = '';
     for (const inst of invidiousInstances) {
-      try {
-        log.info(`Trying Invidious via ${inst}`);
-        const iUrl = `${inst}/watch?v=${id}`;
-        return pipeOutput(['--no-warnings', '-f', 'bestaudio', '-o', '-', iUrl]);
-      } catch (e: any) {
-        lastErr = (e.stderr || e.msg || e.message || '').slice(0, 100);
-        log.warn(`${inst}: ${lastErr}`);
-      }
+      log.info(`Trying Invidious via ${inst}`);
+      const iUrl = `${inst}/watch?v=${id}`;
+      return pipeOutput(['--no-warnings', '-o', '-', iUrl]);
     }
 
     const empty = new Readable({ read() { this.push(null); } });
-    (empty as any)._ytError = `YouTube playback failed: ${lastErr || 'All sources exhausted'}`;
+    (empty as any)._ytError = `YouTube playback failed: all sources exhausted`;
     return empty;
   }
 }
