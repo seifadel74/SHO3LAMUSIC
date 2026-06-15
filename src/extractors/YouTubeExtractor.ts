@@ -232,32 +232,46 @@ export class YouTubeExtractor implements IMusicProvider {
 
     const ffmpegPath = (await import('ffmpeg-static')).default;
 
-    function pipeOutput(ytArgs: string[]): Readable {
-      const ytProc = spawn(BIN, ytArgs);
-      const ffProc = spawn(ffmpegPath!, ['-i', 'pipe:0', '-f', 'opus', '-ar', '48000', '-ac', '2', 'pipe:1']);
-      ytProc.stdout.pipe(ffProc.stdin);
+    function pipeOutput(ytArgs: string[]): Promise<Readable> {
+      return new Promise((resolve, reject) => {
+        const ytProc = spawn(BIN, ytArgs);
+        const ffProc = spawn(ffmpegPath!, ['-i', 'pipe:0', '-f', 'opus', '-ar', '48000', '-ac', '2', 'pipe:1']);
+        ytProc.stdout.pipe(ffProc.stdin);
 
-      ytProc.stderr.on('data', (d: Buffer) => {
-        const line = d.toString().trim();
-        if (line) log.info(`[yt-dlp] ${line.slice(0, 200)}`);
+        let resolved = false;
+        const done = (s: Readable) => { if (!resolved) { resolved = true; resolve(s); } };
+        const fail = (r: string) => { if (!resolved) { resolved = true; ffProc.kill(); ytProc.kill(); reject(new Error(r)); } };
+
+        ffProc.stdout.once('data', () => done(ffProc.stdout));
+
+        ytProc.stderr.on('data', (d: Buffer) => {
+          const line = d.toString().slice(0, 200).trim();
+          if (line) log.info(`[yt-dlp] ${line}`);
+          if (/Sign in to confirm|HTTP Error [34]\d\d/.test(line)) fail(line);
+        });
+        ytProc.on('error', (e) => fail(e.message));
+        ytProc.on('exit', (c) => { if (c !== 0) setTimeout(() => fail(`yt-dlp exited (${c})`), 2000); });
+
+        ffProc.stderr.on('data', (d: Buffer) => {
+          const line = d.toString().trim();
+          if (line && !line.includes('ffmpeg version') && !line.includes('built with')
+            && !line.includes('configuration') && !line.startsWith('lib')) log.info(`[ffmpeg] ${line}`);
+        });
+        ffProc.on('error', (e) => log.error(`ffmpeg error: ${e.message}`));
+        ffProc.on('exit', (c, s) => log.info(`ffmpeg exited (code=${c}, signal=${s})`));
+
+        setTimeout(() => fail('Timeout: no stream data received'), 15000);
       });
-      ytProc.on('error', (e) => { log.error(`yt-dlp error: ${e.message}`); ffProc.kill(); });
-
-      ffProc.stderr.on('data', (d: Buffer) => {
-        const line = d.toString().trim();
-        if (line && !line.includes('ffmpeg version') && !line.includes('built with')
-          && !line.includes('configuration') && !line.startsWith('lib')) log.info(`[ffmpeg] ${line}`);
-      });
-      ffProc.on('error', (e) => log.error(`ffmpeg error: ${e.message}`));
-      ffProc.on('exit', (c, s) => log.info(`ffmpeg exited (code=${c}, signal=${s})`));
-
-      return ffProc.stdout;
     }
 
     // Strategy 1: yt-dlp directly to YouTube with cookies
     if (cookieFileValid()) {
       log.info('Trying direct YouTube stream with cookies');
-      return pipeOutput([...ytArgsWithCookies(), '-f', 'bestaudio/best', '-o', '-', url]);
+      try {
+        return await pipeOutput([...ytArgsWithCookies(), '-f', 'bestaudio/best', '-o', '-', url]);
+      } catch (e: any) {
+        log.warn(`Direct YouTube failed: ${e.message}`);
+      }
     }
 
     // Strategy 2: Fallback to Invidious
@@ -268,11 +282,14 @@ export class YouTubeExtractor implements IMusicProvider {
       invidiousInstances = [cachedInvidious, ...invidiousInstances.filter(i => i !== cachedInvidious)];
     }
 
-    let lastErr = '';
     for (const inst of invidiousInstances) {
       log.info(`Trying Invidious via ${inst}`);
       const iUrl = `${inst}/watch?v=${id}`;
-      return pipeOutput(['--no-warnings', '-o', '-', iUrl]);
+      try {
+        return await pipeOutput(['--no-warnings', '-o', '-', iUrl]);
+      } catch (e: any) {
+        log.warn(`${inst}: ${e.message}`);
+      }
     }
 
     const empty = new Readable({ read() { this.push(null); } });
