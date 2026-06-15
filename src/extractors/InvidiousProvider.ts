@@ -44,17 +44,17 @@ async function ensureInstances(): Promise<void> {
       signal: AbortSignal.timeout(10000),
     });
     if (res.ok) {
-      const data: any = await res.json();
-      for (const entry of data) {
+      const apiData: any = await res.json();
+      for (const entry of apiData) {
         const info = entry[1];
         if (info.type === 'https' && info.api && info.uri) {
           urls.add(info.uri.replace(/\/$/, ''));
         }
       }
+      log.info(`Loaded ${urls.size} instances (${apiData.length} from API)`);
     }
-    log.info(`Loaded ${urls.size} instances (${data?.length ?? 0} from API)`);
   } catch {
-    log.warn('Instance API unreachable, using known list');
+    log.warn('Instance API unreachable');
   }
 
   instances = [...urls].sort(() => Math.random() - 0.5);
