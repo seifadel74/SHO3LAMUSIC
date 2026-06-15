@@ -3,25 +3,34 @@ import { IMusicProvider } from './IMusicProvider.js';
 import { YouTubeExtractor } from './YouTubeExtractor.js';
 import { SoundCloudExtractor } from './SoundCloudExtractor.js';
 import { DirectProvider } from './DirectProvider.js';
+import { InvidiousProvider } from './InvidiousProvider.js';
 
 const providers: IMusicProvider[] = [];
-const bySource = new Map<Source, IMusicProvider>();
 
 export function initProviders(): void {
   register(new YouTubeExtractor());
+  register(new InvidiousProvider());
   register(new SoundCloudExtractor());
   register(new DirectProvider());
 }
 
 export function register(provider: IMusicProvider): void {
   providers.push(provider);
-  bySource.set(provider.source, provider);
+}
+
+function firstEnabled(source: Source): IMusicProvider | undefined {
+  for (const p of providers) {
+    if (p.source === source && p.enabled) return p;
+  }
+  return undefined;
 }
 
 function detectSource(query: string): Source | null {
+  // check validate() on all providers first
   for (const p of providers) {
     if (p.validate?.(query)) return p.source;
   }
+  // fallback regex
   if (/soundcloud\.com/i.test(query)) return Source.SoundCloud;
   if (/youtube\.com|youtu\.be/i.test(query)) return Source.YouTube;
   if (/\.(mp3|ogg|wav|flac|m4a|aac|opus)(\?|$)/i.test(query)) return Source.Direct;
@@ -31,16 +40,19 @@ function detectSource(query: string): Source | null {
 export function resolveProvider(query: string): IMusicProvider {
   const source = detectSource(query);
   if (source) {
-    const p = bySource.get(source);
+    const p = firstEnabled(source);
     if (p) return p;
   }
-  return bySource.get(Source.YouTube)!;
+  // fallback to any YouTube provider
+  const yt = firstEnabled(Source.YouTube);
+  if (yt) return yt;
+  throw new Error('No enabled provider for this source');
 }
 
 export function getProvider(source: Source): IMusicProvider {
-  const p = bySource.get(source);
-  if (!p) throw new Error(`No provider registered for source: ${source}`);
-  return p;
+  const p = firstEnabled(source);
+  if (p) return p;
+  throw new Error(`No enabled provider for source: ${source}`);
 }
 
 export function getEnabledProviders(): IMusicProvider[] {
