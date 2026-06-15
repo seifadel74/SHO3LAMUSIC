@@ -264,17 +264,31 @@ export class YouTubeExtractor implements IMusicProvider {
       return ffProc.stdout;
     }
 
+    // Helper: try a strategy, return the stream on success, or null on failure
+    async function tryStrategy(label: string, ytArgs: string[], pipeArgs: string[]): Promise<Readable | null> {
+      log.info(`Trying ${label}`);
+      try {
+        await ytSpawn(ytArgs, 25000);
+        return pipeOutputSync(pipeArgs);
+      } catch (e: any) {
+        const isAuth = (e.msg || '').includes('cookies have expired') || (e.msg || '').includes('blocked');
+        if (!isAuth) {
+          log.warn(`${label} probe failed (${e.msg || e.message}), trying pipe anyway`);
+          return pipeOutputSync(pipeArgs);
+        }
+        log.warn(`${label} auth failed: ${e.msg || e.message}`);
+        return null;
+      }
+    }
+
     // Strategy 1: yt-dlp directly to YouTube with cookies
     if (cookieFileValid()) {
-      log.info('Trying direct YouTube stream with cookies');
-      try {
-        await ytSpawn([...ytArgsWithCookies(), '--dump-json', url], 30000);
-        return pipeOutputSync([...ytArgsWithCookies(), '-f', 'bestaudio/best', '-o', '-', url]);
-      } catch (e: any) {
-        log.warn(`Direct YouTube probe failed: ${e.msg || e.message}, trying pipe anyway`);
-        // Probe failed — try the pipe directly; yt-dlp retries may still succeed
-        return pipeOutputSync([...ytArgsWithCookies(), '-f', 'bestaudio/best', '-o', '-', url]);
-      }
+      const s = await tryStrategy(
+        'direct YouTube with cookies',
+        [...ytArgsWithCookies(), '--dump-json', url],
+        [...ytArgsWithCookies(), '-f', 'bestaudio/best', '-o', '-', url],
+      );
+      if (s) return s;
     }
 
     // Strategy 2: Fallback to Invidious (try pipes directly, no probe)
@@ -293,13 +307,14 @@ export class YouTubeExtractor implements IMusicProvider {
       return pipeOutputSync(args);
     }
 
-    // Strategy 3: yt-dlp without cookies (relies on retries / geo-bypass / proxy)
-    log.info('Trying direct YouTube without cookies');
-    try {
-      await ytSpawn([...ytArgs(), '--dump-json', '--geo-bypass', url], 20000);
-      return pipeOutputSync([...ytArgs(), '-f', 'bestaudio/best', '-o', '-', '--geo-bypass', url]);
-    } catch (e: any) {
-      log.warn(`No-cookies YouTube failed: ${e.msg || e.message}`);
+    // Strategy 3: yt-dlp without cookies (relies on geo-bypass / proxy)
+    {
+      const s = await tryStrategy(
+        'direct YouTube without cookies',
+        [...ytArgs(), '--dump-json', '--geo-bypass', url],
+        [...ytArgs(), '-f', 'bestaudio/best', '-o', '-', '--geo-bypass', url],
+      );
+      if (s) return s;
     }
 
     const empty = new Readable({ read() { this.push(null); } });
