@@ -179,7 +179,6 @@ let invidiousInstances: string[] = [];
 let cachedInvidious: string | null = null;
 
 async function ensureInvidious(): Promise<void> {
-  if (invidiousInstances.length > 0) return;
   const set = new Set(INVIDIOUS_INSTANCES);
   try {
     const res = await fetch('https://api.invidious.io/instances.json?sort_by=type,users', { signal: AbortSignal.timeout(8000) });
@@ -192,50 +191,6 @@ async function ensureInvidious(): Promise<void> {
     }
   } catch {}
   invidiousInstances = [...set];
-}
-
-async function streamViaInvidious(url: string): Promise<Readable> {
-  const id = url.match(/(?:v=|youtu\.be\/|shorts\/)([a-zA-Z0-9_-]{11})/)?.[1];
-  if (!id) throw new Error('Invalid YouTube URL');
-  await ensureInvidious();
-
-  if (cachedInvidious) {
-    invidiousInstances = [cachedInvidious, ...invidiousInstances.filter(i => i !== cachedInvidious)];
-  }
-
-  let lastErr = '';
-  for (const inst of invidiousInstances) {
-    try {
-      log.info(`Trying Invidious via ${inst}`);
-      const iUrl = `${inst}/watch?v=${id}`;
-      const out = await ytSpawn(['--no-warnings', '-g', iUrl], 30000);
-      const streamUrl = out.stdout.trim().split('\n').find(l => l.startsWith('http'));
-      if (!streamUrl) continue;
-      cachedInvidious = inst;
-      log.info(`Invidious stream URL resolved`);
-
-      const ffmpegPath = (await import('ffmpeg-static')).default;
-      const ffProc = spawn(ffmpegPath!, [
-        '-reconnect', '1', '-reconnect_streamed', '1', '-reconnect_delay_max', '5',
-        '-i', streamUrl, '-f', 'opus', '-ar', '48000', '-ac', '2', 'pipe:1',
-      ]);
-      ffProc.stderr.on('data', (d: Buffer) => {
-        const line = d.toString().trim();
-        if (line && !line.includes('ffmpeg version') && !line.includes('built with')
-          && !line.includes('configuration') && !line.startsWith('lib')) log.info(`[ffmpeg] ${line}`);
-      });
-      ffProc.on('error', e => log.error(`ffmpeg error: ${e.message}`));
-      ffProc.on('exit', c => log.info(`ffmpeg exited (${c})`));
-      return ffProc.stdout;
-    } catch (e: any) {
-      lastErr = (e.stderr || e.msg || e.message || '').slice(0, 100);
-      log.warn(`${inst}: ${lastErr}`);
-    }
-  }
-
-  const empty = new Readable({ read() { this.push(null); } });
-  (empty as any)._ytError = `YouTube playback failed: ${lastErr || 'All sources exhausted'}`;
-  return empty;
 }
 
 // ── URL helpers ──────────────────────────────────────────────────────────────
@@ -280,36 +235,59 @@ export class YouTubeExtractor implements IMusicProvider {
     const id = extractId(url);
     if (!id) throw new Error('Invalid YouTube URL');
 
+    const ffmpegPath = (await import('ffmpeg-static')).default;
+
+    function pipeOutput(ytArgs: string[]): Readable {
+      const ytProc = spawn(BIN, ytArgs);
+      const ffProc = spawn(ffmpegPath!, ['-i', 'pipe:0', '-f', 'opus', '-ar', '48000', '-ac', '2', 'pipe:1']);
+      ytProc.stdout.pipe(ffProc.stdin);
+
+      ytProc.stderr.on('data', (d: Buffer) => {
+        const line = d.toString().trim();
+        if (line) log.info(`[yt-dlp] ${line.slice(0, 200)}`);
+      });
+      ytProc.on('error', (e) => { log.error(`yt-dlp error: ${e.message}`); ffProc.kill(); });
+
+      ffProc.stderr.on('data', (d: Buffer) => {
+        const line = d.toString().trim();
+        if (line && !line.includes('ffmpeg version') && !line.includes('built with')
+          && !line.includes('configuration') && !line.startsWith('lib')) log.info(`[ffmpeg] ${line}`);
+      });
+      ffProc.on('error', (e) => log.error(`ffmpeg error: ${e.message}`));
+      ffProc.on('exit', (c, s) => log.info(`ffmpeg exited (code=${c}, signal=${s})`));
+
+      return ffProc.stdout;
+    }
+
     // Strategy 1: yt-dlp directly to YouTube with cookies
     if (cookieFileValid()) {
-      try {
-        log.info('Trying direct YouTube stream with cookies');
-        const { stdout } = await ytSpawn([...ytArgsWithCookies(), '-g', '-f', 'bestaudio', url]);
-        const streamUrl = stdout.trim().split('\n').find(l => l.startsWith('http'));
-        if (streamUrl) {
-          log.info('Direct YouTube stream URL resolved');
-          const ffmpegPath = (await import('ffmpeg-static')).default;
-          const ffProc = spawn(ffmpegPath!, [
-            '-reconnect', '1', '-reconnect_streamed', '1', '-reconnect_delay_max', '5',
-            '-i', streamUrl, '-f', 'opus', '-ar', '48000', '-ac', '2', 'pipe:1',
-          ]);
-          ffProc.stderr.on('data', (d: Buffer) => {
-            const line = d.toString().trim();
-            if (line && !line.includes('ffmpeg version') && !line.includes('built with')
-              && !line.includes('configuration') && !line.startsWith('lib')) log.info(`[ffmpeg] ${line}`);
-          });
-          ffProc.on('error', e => log.error(`ffmpeg error: ${e.message}`));
-          ffProc.on('exit', c => log.info(`ffmpeg exited (${c})`));
-          return ffProc.stdout;
-        }
-      } catch (e: any) {
-        log.warn(`Direct YouTube failed: ${e.msg || e.message}`);
-      }
+      log.info('Trying direct YouTube stream with cookies');
+      return pipeOutput([...ytArgsWithCookies(), '-f', 'bestaudio', '-o', '-', url]);
     }
 
     // Strategy 2: Fallback to Invidious
     log.info('Falling back to Invidious proxy');
-    return streamViaInvidious(url);
+    await ensureInvidious();
+
+    if (cachedInvidious) {
+      invidiousInstances = [cachedInvidious, ...invidiousInstances.filter(i => i !== cachedInvidious)];
+    }
+
+    let lastErr = '';
+    for (const inst of invidiousInstances) {
+      try {
+        log.info(`Trying Invidious via ${inst}`);
+        const iUrl = `${inst}/watch?v=${id}`;
+        return pipeOutput(['--no-warnings', '-f', 'bestaudio', '-o', '-', iUrl]);
+      } catch (e: any) {
+        lastErr = (e.stderr || e.msg || e.message || '').slice(0, 100);
+        log.warn(`${inst}: ${lastErr}`);
+      }
+    }
+
+    const empty = new Readable({ read() { this.push(null); } });
+    (empty as any)._ytError = `YouTube playback failed: ${lastErr || 'All sources exhausted'}`;
+    return empty;
   }
 }
 
