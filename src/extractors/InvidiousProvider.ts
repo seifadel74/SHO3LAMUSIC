@@ -84,11 +84,7 @@ async function streamViaInvidious(url: string): Promise<Readable> {
     const invidiousUrl = `${inst}/watch?v=${id}`;
     try {
       log.info(`Trying yt-dlp via ${inst}`);
-      const stdout = await ytDLP([
-        ...ytArgs(),
-        '-g', '-f', 'bestaudio',
-        invidiousUrl,
-      ], 25000);
+      const stdout = await ytDLP([...ytArgs(), '-g', invidiousUrl], 25000);
       const streamUrl = stdout.trim().split('\n').find((l) => l.startsWith('http'));
       if (!streamUrl) throw new Error('No stream URL returned');
       workingInstance = inst;
