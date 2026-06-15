@@ -1,8 +1,5 @@
 import { Readable } from 'stream';
 import { spawn } from 'child_process';
-import { existsSync } from 'fs';
-import { tmpdir } from 'os';
-import { join } from 'path';
 import { Source } from '../types.js';
 import { IMusicProvider, SearchResult } from './IMusicProvider.js';
 import ytSearch from 'yt-search';
@@ -49,11 +46,8 @@ function ytDLP(args: string[], timeout = 20000): Promise<string> {
 }
 
 function ytArgs(): string[] {
-  const args: string[] = ['--no-warnings', '--js-runtimes', 'node'];
-  const COOKIE_FILE = join(tmpdir(), 'yt-cookies.txt');
-  if (existsSync(COOKIE_FILE)) args.push('--cookies', COOKIE_FILE);
-  args.push('--user-agent', 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36');
-  return args;
+  return ['--no-warnings', '--js-runtimes', 'node',
+    '--user-agent', 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36'];
 }
 
 async function streamViaInvidious(url: string): Promise<Readable> {

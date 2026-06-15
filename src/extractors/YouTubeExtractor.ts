@@ -57,12 +57,13 @@ export const YT_ERROR_MESSAGES: Record<YtStreamError, string> = {
   [YtStreamError.Private]:
     'This video is private.',
   [YtStreamError.NoCookies]:
-    'YouTube cookies are required. Set the YOUTUBE_COOKIES environment variable.',
+    'YouTube cookies are required and must be in Netscape format. Export cookies from your browser using "Get cookies.txt" extension.',
   [YtStreamError.Unknown]:
     'Unable to stream this YouTube video. Please try another link.',
 };
 
 function classifyError(stderr: string): YtStreamError {
+  if (/does not look like a Netscape format/i.test(stderr)) return YtStreamError.NoCookies;
   if (/Sign in to confirm/i.test(stderr)) return YtStreamError.BotDetection;
   if (/HTTP Error 403/i.test(stderr)) return YtStreamError.Http403;
   if (/HTTP Error 429/i.test(stderr)) return YtStreamError.Http429;
