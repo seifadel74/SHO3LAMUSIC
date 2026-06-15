@@ -8,8 +8,8 @@ import { InvidiousProvider } from './InvidiousProvider.js';
 const providers: IMusicProvider[] = [];
 
 export function initProviders(): void {
-  register(new YouTubeExtractor());
   register(new InvidiousProvider());
+  register(new YouTubeExtractor());
   register(new SoundCloudExtractor());
   register(new DirectProvider());
 }
