@@ -1,5 +1,4 @@
 import { Snowflake } from 'discord.js';
-import { Readable } from 'stream';
 
 export const LoopMode = {
   None: 'none',
@@ -22,7 +21,6 @@ export interface Track {
   thumbnail: string;
   requestedBy: string;
   source: Source;
-  stream: () => Promise<Readable>;
 }
 
 export interface GuildQueue {

@@ -1,4 +1,3 @@
-import { Readable } from 'stream';
 import { Source } from '../types.js';
 import { IMusicProvider, SearchResult } from './IMusicProvider.js';
 import { config } from '../config.js';
@@ -57,16 +56,5 @@ export class SoundCloudExtractor implements IMusicProvider {
       thumbnail: resolve.artwork_url ?? '',
       source: Source.SoundCloud,
     };
-  }
-
-  async stream(url: string): Promise<Readable> {
-    const resolve: any = await scdlFetch(`/resolve?url=${encodeURIComponent(url)}`);
-    if (!resolve) throw new Error('Could not fetch SoundCloud track info');
-    const streamData: any = await scdlFetch(`/tracks/${resolve.id}/streams`);
-    if (!streamData) throw new Error('Could not fetch SoundCloud stream');
-    const mp3Url = streamData.http_mp3_128_url || streamData.hls_mp3_128_url;
-    if (!mp3Url) throw new Error('No audio stream available for this track');
-    const res = await fetch(mp3Url);
-    return Readable.fromWeb(res.body! as any);
   }
 }

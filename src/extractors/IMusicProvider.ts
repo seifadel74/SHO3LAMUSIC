@@ -1,4 +1,3 @@
-import { Readable } from 'stream';
 import { Track, Source } from '../types.js';
 
 export interface SearchResult {
@@ -15,7 +14,6 @@ export interface IMusicProvider {
   readonly source: Source;
   search(query: string): Promise<SearchResult[]>;
   getInfo(url: string): Promise<SearchResult>;
-  stream(url: string): Promise<Readable>;
   getPlaylist?(url: string): Promise<SearchResult[]>;
   validate?(url: string): boolean;
 }

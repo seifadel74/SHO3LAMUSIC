@@ -35,10 +35,7 @@ function toSerializable(track: Track): SerializableTrack {
 }
 
 function toTrack(s: SerializableTrack): Track {
-  return {
-    ...s,
-    stream: async () => getProvider(s.source).stream(s.url),
-  };
+  return { ...s };
 }
 
 export function saveQueues(queues: GuildQueues): void {

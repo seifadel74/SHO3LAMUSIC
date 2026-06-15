@@ -1,45 +1,41 @@
-import {
-  joinVoiceChannel,
-  getVoiceConnection,
-  VoiceConnection,
-  VoiceConnectionStatus,
-  entersState,
-} from '@discordjs/voice';
-import { Guild, ChannelType, VoiceChannel, StageChannel } from 'discord.js';
+import { Guild, ChannelType } from 'discord.js';
 import { logger } from '../core/Logger.js';
+import { getShoukaku } from '../lavalink/Manager.js';
+import { Player } from './Player.js';
 
-export function connectToVoice(guild: Guild, voiceChannelId: string): VoiceConnection | null {
+const players = new Map<string, Player>();
+
+export async function connectToVoice(guild: Guild, voiceChannelId: string): Promise<Player | null> {
   const channel = guild.channels.cache.get(voiceChannelId);
   if (!channel || (channel.type !== ChannelType.GuildVoice && channel.type !== ChannelType.GuildStageVoice)) {
     return null;
   }
 
-  const connection = joinVoiceChannel({
-    channelId: voiceChannelId,
-    guildId: guild.id,
-    adapterCreator: guild.voiceAdapterCreator,
-    selfDeaf: true,
-  });
+  try {
+    const shoukaku = getShoukaku();
+    const sPlayer = await shoukaku.joinVoiceChannel({
+      guildId: guild.id,
+      channelId: voiceChannelId,
+      shardId: 0,
+    });
 
-  connection.on(VoiceConnectionStatus.Disconnected, async () => {
-    try {
-      await Promise.race([
-        entersState(connection, VoiceConnectionStatus.Signalling, 5_000),
-        entersState(connection, VoiceConnectionStatus.Connecting, 5_000),
-      ]);
-    } catch {
-      connection.destroy();
-    }
-  });
-
-  return connection;
+    const botPlayer = new Player();
+    botPlayer.bindPlayer(sPlayer);
+    players.set(guild.id, botPlayer);
+    logger.info(`Connected Lavalink for guild ${guild.id}`);
+    return botPlayer;
+  } catch (err: any) {
+    logger.error(`Failed to connect Lavalink: ${err.message}`);
+    return null;
+  }
 }
 
 export function disconnectFromVoice(guildId: string): void {
-  const connection = getVoiceConnection(guildId);
-  if (connection) connection.destroy();
+  const shoukaku = getShoukaku();
+  shoukaku.leaveVoiceChannel(guildId);
+  players.delete(guildId);
 }
 
-export function getConnection(guildId: string): VoiceConnection | null {
-  return getVoiceConnection(guildId) ?? null;
+export function getPlayer(guildId: string): Player | undefined {
+  return players.get(guildId);
 }

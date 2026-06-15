@@ -12,8 +12,11 @@ import {
   ButtonStyle,
   EmbedBuilder,
 } from 'discord.js';
+import { getShoukaku } from '../lavalink/Manager.js';
 import { Player } from './Player.js';
-import { connectToVoice, disconnectFromVoice, getConnection } from './VoiceManager.js';
+import { connectToVoice, disconnectFromVoice, getPlayer } from './VoiceManager.js';
+import { LoadType } from 'shoukaku';
+import type { LavalinkResponse } from 'shoukaku';
 import {
   getQueue,
   deleteQueue,
@@ -37,7 +40,6 @@ import { addFavorite, removeFavorite, getUserFavorites, loadFavorites } from './
 import { trackPlayed, getStats, loadStats } from './StatsStore.js';
 import { trackPlayedByUser, loadUserStats, getUserStats } from './UserStatsStore.js';
 
-const players = new Map<Snowflake, Player>();
 const idleTimers = new Map<Snowflake, NodeJS.Timeout>();
 const suggestions = new Map<Snowflake, Track[]>();
 
@@ -45,6 +47,15 @@ let initialized = false;
 
 const IDLE_TIMEOUT_MS = 15 * 60 * 1000;
 const SUGGESTIONS_COUNT = 5;
+
+function getEncodedFromResponse(response: LavalinkResponse | undefined): string | null {
+  if (!response) return null;
+  if (response.loadType === LoadType.ERROR || response.loadType === LoadType.EMPTY) return null;
+  if (response.loadType === LoadType.TRACK) return (response.data as any).encoded;
+  if (response.loadType === LoadType.SEARCH) return (response.data as any[])[0]?.encoded ?? null;
+  if (response.loadType === LoadType.PLAYLIST) return (response.data as any).tracks?.[0]?.encoded ?? null;
+  return null;
+}
 
 function clearIdleTimer(guildId: Snowflake) {
   const timer = idleTimers.get(guildId);
@@ -76,13 +87,8 @@ function ensureInit() {
   }
 }
 
-function getPlayer(guildId: Snowflake): Player {
-  let player = players.get(guildId);
-  if (!player) {
-    player = new Player();
-    players.set(guildId, player);
-  }
-  return player;
+function getStoredPlayer(guildId: Snowflake): Player | undefined {
+  return getStoredPlayer(guildId);
 }
 
 async function updateNowPlaying(guildId: Snowflake) {
@@ -92,7 +98,7 @@ async function updateNowPlaying(guildId: Snowflake) {
 
   const { nowPlayingEmbed } = await import('../utils/embed.js');
   const embed = nowPlayingEmbed(track);
-  const paused = getPlayer(guildId).state === 'paused';
+  const paused = getPlayer(guildId)?.state === 'paused';
   const buttons = nowPlayingButtons(paused, queue.loopMode);
 
   const { getNowPlayingMessage } = await import('./QueueManager.js');
@@ -128,7 +134,6 @@ export async function handleSuggest(interaction: ChatInputCommandInteraction): P
 
   const tracks: Track[] = results.map((r) => ({
     ...r,
-    stream: () => extractor.stream(r.url),
     requestedBy: '✨ Suggestion',
   }));
   suggestions.set(guildId, tracks);
@@ -171,9 +176,8 @@ async function setUpNextTrack(guildId: Snowflake) {
 
 async function playTrackInternal(guildId: Snowflake, track: Track): Promise<void> {
   const queue = getQueue(guildId);
-  const player = getPlayer(guildId);
-  const connection = getConnection(guildId);
-  if (!connection) { logger.warn('No connection in playTrackInternal'); return; }
+  const player = getStoredPlayer(guildId);
+  if (!player) { logger.warn('No Lavalink player in playTrackInternal'); return; }
 
   trackPlayed(track.duration, track.requestedBy);
   trackPlayedByUser(track.requestedBy, track.title, track.url, track.duration);
@@ -183,28 +187,20 @@ async function playTrackInternal(guildId: Snowflake, track: Track): Promise<void
   player.setOnError(onTrackEnd);
 
   try {
-    logger.info(`Starting stream for: ${track.title}`);
-    const stream = await track.stream();
-    const ytError = (stream as any)._ytError;
-    if (ytError) {
-      logger.warn(`Stream unavailable for ${track.title}: ${ytError}`);
-      const channel = await getSendChannel(null, guildId);
-      if (channel) {
-        const embed = new EmbedBuilder()
-          .setColor(0xed4245)
-          .setTitle('⚠️ Playback Error')
-          .setDescription(ytError)
-          .setFooter({ text: track.title });
-        await channel.send({ embeds: [embed] });
-      }
-      await setUpNextTrack(guildId);
-      return;
-    }
-    logger.info('Stream obtained, subscribing player to connection');
-    player.subscribe(connection);
-    logger.info('Player subscribed, playing stream');
-    player.play(stream, queue.volume);
-    logger.info('Play command issued');
+    logger.info(`Playing via Lavalink: ${track.title}`);
+
+    const shoukaku = getShoukaku();
+    const llPlayer = shoukaku.players.get(guildId);
+    if (!llPlayer) throw new Error('Lavalink player not found');
+
+    const result = await llPlayer.node.rest.resolve(track.url);
+    const encoded = getEncodedFromResponse(result);
+    if (!encoded) throw new Error('No tracks resolved from Lavalink');
+
+    player.bindPlayer(llPlayer);
+    await player.playTrack(encoded);
+    player.setVolume(queue.volume);
+    logger.info('Lavalink playback started');
 
     const { nowPlayingEmbed } = await import('../utils/embed.js');
     const embed = nowPlayingEmbed(track);
@@ -225,9 +221,8 @@ async function playCurrent(interaction: ChatInputCommandInteraction, guildId: Sn
   if (queue.currentIndex < 0 || queue.currentIndex >= queue.tracks.length) return;
 
   const track = queue.tracks[queue.currentIndex];
-  const player = getPlayer(guildId);
-  const connection = getConnection(guildId);
-  if (!connection) return;
+  const player = getStoredPlayer(guildId);
+  if (!player) return;
 
   trackPlayed(track.duration, track.requestedBy);
   trackPlayedByUser(track.requestedBy, track.title, track.url, track.duration);
@@ -237,24 +232,20 @@ async function playCurrent(interaction: ChatInputCommandInteraction, guildId: Sn
   player.setOnError(onTrackEnd);
 
   try {
-    const stream = await track.stream();
-    const ytError = (stream as any)._ytError;
-    if (ytError) {
-      logger.warn(`Stream unavailable for ${track.title}: ${ytError}`);
-      const channel = interaction.channel as TextChannel | NewsChannel | ThreadChannel;
-      if (channel?.send) {
-        const embed = new EmbedBuilder()
-          .setColor(0xed4245)
-          .setTitle('⚠️ Playback Error')
-          .setDescription(ytError)
-          .setFooter({ text: track.title });
-        await channel.send({ embeds: [embed] });
-      }
-      await setUpNextTrack(guildId);
-      return;
-    }
-    player.subscribe(connection);
-    player.play(stream, queue.volume);
+    logger.info(`Playing via Lavalink: ${track.title}`);
+
+    const shoukaku = getShoukaku();
+    const llPlayer = shoukaku.players.get(guildId);
+    if (!llPlayer) throw new Error('Lavalink player not found');
+
+    const result = await llPlayer.node.rest.resolve(track.url);
+    const encoded = getEncodedFromResponse(result);
+    if (!encoded) throw new Error('No tracks resolved from Lavalink');
+
+    player.bindPlayer(llPlayer);
+    await player.playTrack(encoded);
+    player.setVolume(queue.volume);
+    logger.info('Lavalink playback started');
 
     const { nowPlayingEmbed } = await import('../utils/embed.js');
     const embed = nowPlayingEmbed(track);
@@ -290,7 +281,11 @@ export async function handlePlay(interaction: ChatInputCommandInteraction): Prom
 
     await interaction.deferReply().catch(() => {});
 
-    connectToVoice(interaction.guild!, voiceChannel.id);
+    const llPlayer = await connectToVoice(interaction.guild!, voiceChannel.id);
+    if (!llPlayer) {
+      await interaction.editReply({ content: 'Failed to connect to voice channel.' }).catch(() => {});
+      return;
+    }
 
     const extractor = resolveProvider(query);
     const isPlaylist = isValidUrl(query) && /[?&]list=/.test(query);
@@ -306,7 +301,6 @@ export async function handlePlay(interaction: ChatInputCommandInteraction): Prom
       for (const r of results) {
         addTrackAndSave(queue, {
           ...r,
-          stream: () => extractor.stream(r.url),
           requestedBy: interaction.user.tag,
         });
       }
@@ -330,7 +324,6 @@ export async function handlePlay(interaction: ChatInputCommandInteraction): Prom
 
     const track: Track = {
       ...result,
-      stream: () => extractor.stream(result.url),
       requestedBy: interaction.user.tag,
     };
 
@@ -350,9 +343,9 @@ export async function handleSkip(interaction: ChatInputCommandInteraction): Prom
   const guildId = interaction.guildId!;
   clearIdleTimer(guildId);
   const player = getPlayer(guildId);
-  player.setOnFinish(null);
-  player.setOnError(null);
-  player.stop();
+  player?.setOnFinish(null);
+  player?.setOnError(null);
+  player?.stop();
   await setUpNextTrack(guildId);
   await interaction.reply({ content: 'Skipped.' });
 }
@@ -361,9 +354,9 @@ export async function handleStop(interaction: ChatInputCommandInteraction): Prom
   const guildId = interaction.guildId!;
   clearIdleTimer(guildId);
   const p = getPlayer(guildId);
-  p.setOnFinish(null);
-  p.setOnError(null);
-  p.stop();
+  p?.setOnFinish(null);
+  p?.setOnError(null);
+  p?.stop();
   clearQueueAndSave(getQueue(guildId));
   disconnectFromVoice(guildId);
   deleteQueue(guildId);
@@ -375,14 +368,14 @@ export async function handleStop(interaction: ChatInputCommandInteraction): Prom
 
 export async function handlePause(interaction: ChatInputCommandInteraction): Promise<void> {
   const guildId = interaction.guildId!;
-  getPlayer(guildId).pause();
+  getPlayer(guildId)?.pause();
   await interaction.reply({ content: 'Paused.' });
   await updateNowPlaying(guildId);
 }
 
 export async function handleResume(interaction: ChatInputCommandInteraction): Promise<void> {
   const guildId = interaction.guildId!;
-  getPlayer(guildId).unpause();
+  getPlayer(guildId)?.resume();
   await interaction.reply({ content: 'Resumed.' });
   await updateNowPlaying(guildId);
 }
@@ -396,7 +389,7 @@ export async function handleVolume(interaction: ChatInputCommandInteraction): Pr
   const guildId = interaction.guildId!;
   const queue = getQueue(guildId);
   queue.volume = volume;
-  getPlayer(guildId).setVolume(volume);
+  getPlayer(guildId)?.setVolume(volume);
   await interaction.reply({ content: `Volume set to ${volume}.` });
 }
 
@@ -546,9 +539,9 @@ export async function handleJump(interaction: ChatInputCommandInteraction): Prom
     return;
   }
   const p2 = getPlayer(interaction.guildId!);
-  p2.setOnFinish(null);
-  p2.setOnError(null);
-  p2.stop();
+  p2?.setOnFinish(null);
+  p2?.setOnError(null);
+  p2?.stop();
   await playCurrent(interaction, interaction.guildId!);
   await interaction.reply({ content: `Jumped to **${track.title}**.` });
 }
@@ -561,14 +554,14 @@ export async function handleButtonInteraction(interaction: ButtonInteraction): P
   const guildId = interaction.guildId;
   const queue = getQueue(guildId);
   const player = getPlayer(guildId);
-  const conn = getConnection(guildId);
+  if (!player) return;
 
   switch (interaction.customId) {
     case 'music_playpause': {
-      if (player.state === 'paused') {
-        player.unpause();
+      if (player?.state === 'paused') {
+        player.resume();
       } else {
-        player.pause();
+        player?.pause();
       }
       await updateNowPlaying(guildId);
       break;
@@ -580,10 +573,18 @@ export async function handleButtonInteraction(interaction: ButtonInteraction): P
       const next = skipTrackAndSave(queue);
       if (next) {
         clearIdleTimer(guildId);
-        const stream = await next.stream();
-        player.subscribe(conn!);
-        player.play(stream, queue.volume);
-        player.setOnFinish(() => setUpNextTrack(guildId));
+        const shoukaku = getShoukaku();
+        const llPlayer = shoukaku.players.get(guildId);
+        if (llPlayer) {
+          const result = await llPlayer.node.rest.resolve(next.url);
+          const encoded = getEncodedFromResponse(result);
+          if (encoded) {
+            player.bindPlayer(llPlayer);
+            await player.playTrack(encoded);
+            player.setVolume(queue.volume);
+            player.setOnFinish(() => setUpNextTrack(guildId));
+          }
+        }
         const { nowPlayingEmbed } = await import('../utils/embed.js');
         const msg = await import('./QueueManager.js').then(m => m.getNowPlayingMessage(guildId));
         if (msg) {
@@ -632,7 +633,7 @@ export async function handleButtonInteraction(interaction: ButtonInteraction): P
       const ext = getProvider(Source.YouTube);
       const res = await ext.search(cur.title);
       if (!res.length) break;
-      const sugTracks: Track[] = res.map((r) => ({ ...r, stream: () => ext.stream(r.url), requestedBy: '💡 Suggested' }));
+      const sugTracks: Track[] = res.map((r) => ({ ...r, requestedBy: '💡 Suggested' }));
       suggestions.set(guildId, sugTracks);
       const btns = sugTracks.map((_, i) =>
         new ButtonBuilder().setCustomId(`suggest_${i}`).setLabel(`${i + 1}`).setStyle(ButtonStyle.Secondary),

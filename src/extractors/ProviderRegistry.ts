@@ -2,14 +2,12 @@ import { Source } from '../types.js';
 import { IMusicProvider } from './IMusicProvider.js';
 import { YouTubeExtractor } from './YouTubeExtractor.js';
 import { SoundCloudExtractor } from './SoundCloudExtractor.js';
-import { DirectProvider } from './DirectProvider.js';
 
 const providers: IMusicProvider[] = [];
 
 export function initProviders(): void {
   register(new YouTubeExtractor());
   register(new SoundCloudExtractor());
-  register(new DirectProvider());
 }
 
 export function register(provider: IMusicProvider): void {

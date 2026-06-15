@@ -1,49 +1,35 @@
-import {
-  AudioPlayer,
-  AudioPlayerStatus,
-  createAudioPlayer,
-  createAudioResource,
-  VoiceConnection,
-  NoSubscriberBehavior,
-  AudioResource,
-} from '@discordjs/voice';
+import { Player as ShoukakuPlayer } from 'shoukaku';
 import { logger } from '../core/Logger.js';
 
 export class Player {
-  private player: AudioPlayer;
-  private currentResource: AudioResource | null = null;
+  private sPlayer: ShoukakuPlayer | null = null;
+  private _paused = false;
   private onFinish: (() => void) | null = null;
   private onError: ((err: Error) => void) | null = null;
+  private _volume = 50;
+  private finishHandler: ((reason: any) => void) | null = null;
+  private errorHandler: ((reason: any) => void) | null = null;
 
-  constructor() {
-    this.player = createAudioPlayer({
-      behaviors: {
-        noSubscriber: NoSubscriberBehavior.Play,
-      },
-    });
+  bindPlayer(sPlayer: ShoukakuPlayer): void {
+    this.sPlayer = sPlayer;
+    this._paused = false;
 
-    this.player.on(AudioPlayerStatus.Idle, () => {
-      logger.info('AudioPlayer -> Idle');
-      this.currentResource = null;
+    if (this.finishHandler) this.sPlayer.off('end', this.finishHandler);
+    if (this.errorHandler) this.sPlayer.off('exception', this.errorHandler);
+
+    this.finishHandler = (reason) => {
+      logger.info(`Lavalink -> Ended (${reason.reason || reason})`);
+      this.sPlayer = null;
+      this._paused = false;
       this.onFinish?.();
-    });
+    };
+    this.errorHandler = (reason) => {
+      logger.error(`Lavalink error: ${reason.exception?.message || reason}`);
+      this.onError?.(new Error(reason.exception?.message || 'Unknown error'));
+    };
 
-    this.player.on(AudioPlayerStatus.Playing, () => {
-      logger.info('AudioPlayer -> Playing');
-    });
-
-    this.player.on(AudioPlayerStatus.Paused, () => {
-      logger.info('AudioPlayer -> Paused');
-    });
-
-    this.player.on(AudioPlayerStatus.AutoPaused, () => {
-      logger.warn('AudioPlayer -> AutoPaused');
-    });
-
-    this.player.on('error', (err) => {
-      logger.error('AudioPlayer error:', err.message);
-      this.onError?.(err);
-    });
+    sPlayer.on('end', this.finishHandler);
+    sPlayer.on('exception', this.errorHandler);
   }
 
   setOnFinish(cb: (() => void) | null): void {
@@ -54,45 +40,51 @@ export class Player {
     this.onError = cb;
   }
 
-  play(stream: import('stream').Readable, volume: number = 50): void {
-    if (this.currentResource) {
-      this.currentResource.playStream?.destroy();
+  get state(): string {
+    if (!this.sPlayer) return 'idle';
+    if (this._paused) return 'paused';
+    if (this.sPlayer.paused) return 'paused';
+    return 'playing';
+  }
+
+  get volume(): number {
+    return this._volume;
+  }
+
+  async playTrack(encoded: string): Promise<void> {
+    if (!this.sPlayer) {
+      logger.error('No shoukaku player to play on');
+      return;
     }
-    const resource = createAudioResource(stream, {
-      inlineVolume: true,
-    });
-    resource.volume?.setVolume(volume / 100);
-    this.currentResource = resource;
-    this.player.play(resource);
-  }
-
-  pause(): boolean {
-    return this.player.pause();
-  }
-
-  unpause(): boolean {
-    return this.player.unpause();
+    await this.sPlayer.playTrack({ track: { encoded } });
   }
 
   stop(): void {
-    this.player.stop(true);
-    if (this.currentResource) {
-      this.currentResource.playStream?.destroy();
+    if (this.sPlayer) {
+      this.sPlayer.stopTrack();
     }
-    this.currentResource = null;
+    this.sPlayer = null;
+    this._paused = false;
+  }
+
+  pause(): boolean {
+    if (!this.sPlayer) return false;
+    this._paused = true;
+    this.sPlayer.setPaused(true);
+    return true;
+  }
+
+  resume(): boolean {
+    if (!this.sPlayer) return false;
+    this._paused = false;
+    this.sPlayer.setPaused(false);
+    return true;
   }
 
   setVolume(volume: number): void {
-    if (this.currentResource?.volume) {
-      this.currentResource.volume.setVolume(volume / 100);
+    this._volume = volume;
+    if (this.sPlayer) {
+      this.sPlayer.setGlobalVolume(volume);
     }
-  }
-
-  get state() {
-    return this.player.state.status;
-  }
-
-  subscribe(connection: VoiceConnection): void {
-    connection.subscribe(this.player);
   }
 }

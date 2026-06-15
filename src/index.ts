@@ -3,6 +3,7 @@ import { config } from './config.js';
 import { logger } from './core/Logger.js';
 import { handleInteraction } from './commands/handler.js';
 import { handleButtonInteraction } from './music/MusicService.js';
+import { initLavalink } from './lavalink/Manager.js';
 
 const client = new Client({
   intents: [
@@ -15,6 +16,7 @@ const client = new Client({
 
 client.once(Events.ClientReady, (c) => {
   logger.info(`Logged in as ${c.user.tag}`);
+  initLavalink(client);
 });
 
 client.on(Events.InteractionCreate, async (interaction) => {
