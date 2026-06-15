@@ -10,11 +10,13 @@ import ytSearch from 'yt-search';
 const BIN = 'yt-dlp';
 const COOKIE_FILE = join(tmpdir(), 'yt-cookies.txt');
 
+const AB = '--throttled-rate 200K --sleep-requests 1.5 --sleep-interval 5 --extractor-retries 5';
+
 const CFG = {
   userAgent: process.env.YT_USER_AGENT
     || 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/125.0.0.0 Safari/537.36',
   proxy: process.env.YT_PROXY || '',
-  timeout: parseInt(process.env.YT_TIMEOUT || '20000', 10),
+  timeout: parseInt(process.env.YT_TIMEOUT || '30000', 10),
 };
 
 const log = {
@@ -149,13 +151,14 @@ function ytSpawn(args: string[], timeout = CFG.timeout): Promise<{ stdout: strin
 }
 
 function ytArgs(): string[] {
-  const args = ['--no-warnings', '--js-runtimes', 'node', '--user-agent', CFG.userAgent];
+  const args = ['--no-warnings', '--js-runtimes', 'node', '--user-agent', CFG.userAgent, ...AB.split(' ')];
   if (CFG.proxy) args.push('--proxy', CFG.proxy);
   return args;
 }
 
 function ytArgsWithCookies(): string[] {
   const args = ytArgs();
+  args.push('--extractor-args', 'youtube:player_client=android');
   if (cookieFileValid()) {
     args.push('--cookies', COOKIE_FILE);
   }
@@ -167,6 +170,11 @@ const INVIDIOUS_INSTANCES = [
   'https://inv.nadeko.net', 'https://yewtu.be',
   'https://invidious.private.coffee', 'https://vid.puffyan.us',
   'https://inv.vern.cc', 'https://invidious.slipfox.xyz',
+  'https://inv.thepixora.com',
+  // extra
+  'https://invidious.001101.lu', 'https://inv.bp.projectsegfau.lt',
+  'https://invidious.froth.zone', 'https://invidious.privacydev.net',
+  'https://invidious.sethforprivacy.com', 'https://invidious.weho.st',
 ];
 
 let invidiousInstances: string[] = [];
@@ -266,7 +274,7 @@ export class YouTubeExtractor implements IMusicProvider {
       }
     }
 
-    // Strategy 2: Fallback to Invidious
+    // Strategy 2: Fallback to Invidious (try pipes directly, no probe)
     log.info('Falling back to Invidious proxy');
     await ensureInvidious();
 
@@ -276,13 +284,16 @@ export class YouTubeExtractor implements IMusicProvider {
 
     for (const inst of invidiousInstances) {
       log.info(`Trying Invidious via ${inst}`);
-      const iUrl = `${inst}/watch?v=${id}`;
-      try {
-        await ytSpawn(['--no-warnings', '--dump-json', iUrl], 15000);
-        return pipeOutputSync(['--no-warnings', '-o', '-', iUrl]);
-      } catch (e: any) {
-        log.warn(`${inst}: ${e.msg || e.message}`);
-      }
+      return pipeOutputSync(['--no-warnings', '-o', '-', `${inst}/watch?v=${id}`]);
+    }
+
+    // Strategy 3: yt-dlp without cookies (relies on retries / geo-bypass)
+    log.info('Trying direct YouTube without cookies');
+    try {
+      await ytSpawn([...ytArgs(), '--dump-json', '--geo-bypass', url], 10000);
+      return pipeOutputSync([...ytArgs(), '-f', 'bestaudio/best', '-o', '-', '--geo-bypass', url]);
+    } catch (e: any) {
+      log.warn(`No-cookies YouTube failed: ${e.msg || e.message}`);
     }
 
     const empty = new Readable({ read() { this.push(null); } });
