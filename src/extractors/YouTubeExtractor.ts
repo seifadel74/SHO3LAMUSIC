@@ -10,7 +10,7 @@ import ytSearch from 'yt-search';
 const BIN = 'yt-dlp';
 const COOKIE_FILE = join(tmpdir(), 'yt-cookies.txt');
 
-const AB = '--throttled-rate 500K --sleep-interval 5 --extractor-retries 3';
+const AB = '--throttled-rate 500K --extractor-retries 3';
 
 const CFG = {
   userAgent: process.env.YT_USER_AGENT
