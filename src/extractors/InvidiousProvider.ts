@@ -15,85 +15,73 @@ const log = {
   error: (msg: string) => console.error(`[INVIDIOUS] ${msg}`),
 };
 
+// Curated list of known-working instances (removed dead ones)
 const KNOWN_INSTANCES = [
   'https://inv.nadeko.net',
   'https://yewtu.be',
   'https://invidious.private.coffee',
   'https://vid.puffyan.us',
-  'https://invidious.lunar.icu',
   'https://inv.vern.cc',
   'https://invidious.slipfox.xyz',
-  'https://invidious.projectsegfau.lt',
-  'https://invidious.xyz',
-  'https://invidious.nerdvpn.de',
 ];
 
-let instances: string[] = [];
+const HEADERS = {
+  'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36',
+  Accept: 'application/json',
+};
 
-async function ensureInstances(): Promise<void> {
-  if (instances.length > 0) return;
+let cachedInstance: string | null = null;
 
-  const urls = new Set<string>();
+async function findInstance(path: string): Promise<{ instance: string; data: any }> {
+  // Try cached instance first
+  if (cachedInstance) {
+    try {
+      const url = `${cachedInstance}/api/v1/${path}`;
+      const res = await fetch(url, { headers: HEADERS, signal: AbortSignal.timeout(10000) });
+      if (res.ok && (res.headers.get('content-type') || '').includes('json')) {
+        log.info(`Using cached instance: ${cachedInstance}`);
+        return { instance: cachedInstance, data: await res.json() };
+      }
+    } catch { /* fall through */ }
+  }
 
-  // Always include known instances
-  for (const u of KNOWN_INSTANCES) urls.add(u);
-
-  // Supplement from API
+  // Build instance list: known instances + API supplement
+  const urls = new Set(KNOWN_INSTANCES);
   try {
-    const res = await fetch('https://api.invidious.io/instances.json?sort_by=type,users', {
-      signal: AbortSignal.timeout(10000),
+    const apiRes = await fetch('https://api.invidious.io/instances.json?sort_by=type,users', {
+      signal: AbortSignal.timeout(8000),
     });
-    if (res.ok) {
-      const apiData: any = await res.json();
+    if (apiRes.ok) {
+      const apiData: any = await apiRes.json();
       for (const entry of apiData) {
         const info = entry[1];
         if (info.type === 'https' && info.api && info.uri) {
           urls.add(info.uri.replace(/\/$/, ''));
         }
       }
-      log.info(`Loaded ${urls.size} instances (${apiData.length} from API)`);
     }
-  } catch {
-    log.warn('Instance API unreachable');
-  }
+  } catch { /* ignore */ }
 
-  instances = [...urls].sort(() => Math.random() - 0.5);
-}
+  const instances = [...urls];
+  log.info(`Trying ${instances.length} instances for /api/v1/${path.split('?')[0]}`);
 
-async function api(path: string): Promise<any> {
-  await ensureInstances();
-
-  const HEADERS = {
-    'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/125.0.0.0 Safari/537.36',
-    Accept: 'application/json',
-  };
-  const tried = new Set<string>();
-
-  for (let attempt = 0; attempt < 2; attempt++) {
-    for (let i = 0; i < instances.length; i++) {
-      const inst = instances[i];
-      if (tried.has(inst)) continue;
-      tried.add(inst);
-
-      try {
-        const url = `${inst}/api/v1/${path}`;
-        const res = await fetch(url, { headers: HEADERS, signal: AbortSignal.timeout(12000) });
-        if (res.ok) {
-          const ct = res.headers.get('content-type') || '';
-          if (!ct.includes('json')) {
-            const text = await res.text();
-            log.warn(`Non-JSON response from ${inst}: ${text.slice(0, 80)}`);
-            continue;
-          }
-          log.info(`Using instance: ${inst}`);
-          return res.json();
-        }
-        if (res.status === 429) {
-          log.warn(`Rate limited on ${inst}`);
-        }
-      } catch {
-        // try next
+  for (const inst of instances) {
+    try {
+      const url = `${inst}/api/v1/${path}`;
+      const res = await fetch(url, { headers: HEADERS, signal: AbortSignal.timeout(10000) });
+      if (res.ok && (res.headers.get('content-type') || '').includes('json')) {
+        cachedInstance = inst;
+        log.info(`Using instance: ${inst}`);
+        return { instance: inst, data: await res.json() };
       }
+      if (res.ok) {
+        const text = await res.text();
+        log.warn(`${inst}: non-JSON (${text.slice(0, 60).replace(/\n/g, ' ')})`);
+      } else {
+        log.warn(`${inst}: HTTP ${res.status}`);
+      }
+    } catch (e: any) {
+      log.warn(`${inst}: ${e?.cause?.code || e?.message || 'error'}`);
     }
   }
 
@@ -120,14 +108,14 @@ export class InvidiousProvider implements IMusicProvider {
   }
 
   async search(query: string): Promise<SearchResult[]> {
-    const data = await api(`search?q=${encodeURIComponent(query)}&type=video`);
+    const { data } = await findInstance(`search?q=${encodeURIComponent(query)}&type=video`);
     return (data ?? []).slice(0, 5).map(trackFromVideo);
   }
 
   async getInfo(url: string): Promise<SearchResult> {
     const id = extractVideoId(url);
     if (!id) throw new Error('Invalid YouTube URL');
-    const data = await api(`videos/${id}`);
+    const { data } = await findInstance(`videos/${id}`);
     return {
       title: data.title ?? 'Unknown',
       url: `https://youtube.com/watch?v=${id}`,
@@ -141,7 +129,7 @@ export class InvidiousProvider implements IMusicProvider {
     const listId = url.match(/list=([a-zA-Z0-9_-]+)/)?.[1];
     if (!listId) throw new Error('Invalid playlist URL');
 
-    const data = await api(`playlists/${listId}?page=1`);
+    const { data } = await findInstance(`playlists/${listId}?page=1`);
     const videos: any[] = data.videos ?? [];
     return videos.slice(0, 50).map((v: any) => ({
       title: v.title ?? 'Unknown',
@@ -156,14 +144,14 @@ export class InvidiousProvider implements IMusicProvider {
     const id = extractVideoId(url);
     if (!id) throw new Error('Invalid YouTube URL');
 
-    const data = await api(`videos/${id}`);
+    const { data } = await findInstance(`videos/${id}`);
     const formats: any[] = data.adaptiveFormats ?? [];
     const audio = formats
       .filter((f: any) => f.type?.startsWith('audio/'))
       .sort((a: any, b: any) => (b.bitrate ?? 0) - (a.bitrate ?? 0))[0];
 
     if (!audio?.url) {
-      log.error(`No audio stream for ${id}`);
+      log.error(`No audio URL for ${id}`);
       const empty = new Readable({ read() { this.push(null); } });
       (empty as any)._ytError = 'No audio stream available for this video.';
       return empty;
