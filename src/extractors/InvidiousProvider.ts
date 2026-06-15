@@ -63,10 +63,13 @@ async function ensureInstances(): Promise<void> {
 async function api(path: string): Promise<any> {
   await ensureInstances();
 
-  const MAX_ATTEMPTS = 2;
+  const HEADERS = {
+    'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/125.0.0.0 Safari/537.36',
+    Accept: 'application/json',
+  };
   const tried = new Set<string>();
 
-  for (let attempt = 0; attempt < MAX_ATTEMPTS; attempt++) {
+  for (let attempt = 0; attempt < 2; attempt++) {
     for (let i = 0; i < instances.length; i++) {
       const inst = instances[i];
       if (tried.has(inst)) continue;
@@ -74,8 +77,14 @@ async function api(path: string): Promise<any> {
 
       try {
         const url = `${inst}/api/v1/${path}`;
-        const res = await fetch(url, { signal: AbortSignal.timeout(12000) });
+        const res = await fetch(url, { headers: HEADERS, signal: AbortSignal.timeout(12000) });
         if (res.ok) {
+          const ct = res.headers.get('content-type') || '';
+          if (!ct.includes('json')) {
+            const text = await res.text();
+            log.warn(`Non-JSON response from ${inst}: ${text.slice(0, 80)}`);
+            continue;
+          }
           log.info(`Using instance: ${inst}`);
           return res.json();
         }
@@ -86,7 +95,6 @@ async function api(path: string): Promise<any> {
         // try next
       }
     }
-    // If first pass exhausted, retry from start with remaining untried
   }
 
   throw new Error('All Invidious instances failed');
