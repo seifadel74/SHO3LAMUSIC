@@ -179,6 +179,7 @@ let invidiousInstances: string[] = [];
 let cachedInvidious: string | null = null;
 
 async function ensureInvidious(): Promise<void> {
+  if (invidiousInstances.length > 0) return;
   const set = new Set(INVIDIOUS_INSTANCES);
   try {
     const res = await fetch('https://api.invidious.io/instances.json?sort_by=type,users', { signal: AbortSignal.timeout(8000) });
