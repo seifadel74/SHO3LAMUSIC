@@ -15,61 +15,78 @@ const log = {
   error: (msg: string) => console.error(`[INVIDIOUS] ${msg}`),
 };
 
-const FALLBACK_INSTANCES = [
+const KNOWN_INSTANCES = [
   'https://inv.nadeko.net',
   'https://yewtu.be',
   'https://invidious.private.coffee',
   'https://vid.puffyan.us',
   'https://invidious.lunar.icu',
   'https://inv.vern.cc',
+  'https://invidious.slipfox.xyz',
+  'https://invidious.projectsegfau.lt',
+  'https://invidious.xyz',
+  'https://invidious.nerdvpn.de',
 ];
 
 let instances: string[] = [];
-let workingInstance: string | null = null;
 
-async function refreshInstances(): Promise<void> {
+async function ensureInstances(): Promise<void> {
+  if (instances.length > 0) return;
+
+  const urls = new Set<string>();
+
+  // Always include known instances
+  for (const u of KNOWN_INSTANCES) urls.add(u);
+
+  // Supplement from API
   try {
     const res = await fetch('https://api.invidious.io/instances.json?sort_by=type,users', {
-      signal: AbortSignal.timeout(8000),
+      signal: AbortSignal.timeout(10000),
     });
-    const data: any = await res.json();
-    const urls: string[] = data
-      .filter(([_, i]: any) => i.type === 'https' && i.api && i.uri)
-      .map(([_, i]: any) => i.uri.replace(/\/$/, ''));
-    if (urls.length > 0) {
-      instances = urls.sort(() => Math.random() - 0.5);
-      log.info(`Loaded ${instances.length} instances from api.invidious.io`);
-      return;
+    if (res.ok) {
+      const data: any = await res.json();
+      for (const entry of data) {
+        const info = entry[1];
+        if (info.type === 'https' && info.api && info.uri) {
+          urls.add(info.uri.replace(/\/$/, ''));
+        }
+      }
     }
+    log.info(`Loaded ${urls.size} instances (${data?.length ?? 0} from API)`);
   } catch {
-    log.warn('Failed to fetch instance list, using hardcoded fallbacks');
+    log.warn('Instance API unreachable, using known list');
   }
-  instances = [...FALLBACK_INSTANCES].sort(() => Math.random() - 0.5);
+
+  instances = [...urls].sort(() => Math.random() - 0.5);
 }
 
 async function api(path: string): Promise<any> {
-  if (instances.length === 0) await refreshInstances();
+  await ensureInstances();
 
+  const MAX_ATTEMPTS = 2;
   const tried = new Set<string>();
-  while (tried.size < instances.length) {
-    const idx = Math.floor(Math.random() * instances.length);
-    const inst = instances[idx];
-    if (tried.has(inst)) continue;
-    tried.add(inst);
 
-    try {
-      const url = `${inst}/api/v1/${path}`;
-      const res = await fetch(url, { signal: AbortSignal.timeout(10000) });
-      if (res.ok) {
-        workingInstance = inst;
-        return res.json();
+  for (let attempt = 0; attempt < MAX_ATTEMPTS; attempt++) {
+    for (let i = 0; i < instances.length; i++) {
+      const inst = instances[i];
+      if (tried.has(inst)) continue;
+      tried.add(inst);
+
+      try {
+        const url = `${inst}/api/v1/${path}`;
+        const res = await fetch(url, { signal: AbortSignal.timeout(12000) });
+        if (res.ok) {
+          log.info(`Using instance: ${inst}`);
+          return res.json();
+        }
+        if (res.status === 429) {
+          log.warn(`Rate limited on ${inst}`);
+        }
+      } catch {
+        // try next
       }
-      if (res.status === 429) {
-        log.warn(`Rate limited on ${inst}, trying next`);
-      }
-    } catch {
-      // instance unreachable, try next
     }
+    // If first pass exhausted, retry from start with remaining untried
   }
 
   throw new Error('All Invidious instances failed');
