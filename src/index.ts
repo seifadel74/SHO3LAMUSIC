@@ -26,3 +26,10 @@ client.on(Events.InteractionCreate, async (interaction) => {
 });
 
 client.login(config.token);
+
+process.on('uncaughtException', (err) => {
+  logger.error(`Uncaught: ${err.message}`);
+});
+process.on('unhandledRejection', (err: any) => {
+  logger.error(`Unhandled rejection: ${err?.message || err}`);
+});

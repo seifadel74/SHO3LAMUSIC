@@ -244,6 +244,9 @@ export class YouTubeExtractor implements IMusicProvider {
       const ytProc = spawn(BIN, ytArgs);
       const ffProc = spawn(ffmpegPath!, ['-i', 'pipe:0', '-f', 'opus', '-ar', '48000', '-ac', '2', 'pipe:1']);
       ytProc.stdout.pipe(ffProc.stdin);
+      ytProc.stdout.on('error', () => {});  // suppress EPIPE when reader disconnects
+      ffProc.stdin.on('error', () => {});
+      ffProc.stdout.on('error', () => {});
 
       ytProc.stderr.on('data', (d: Buffer) => {
         const line = d.toString().slice(0, 200).trim();
