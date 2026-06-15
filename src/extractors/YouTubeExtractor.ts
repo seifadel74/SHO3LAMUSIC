@@ -25,14 +25,14 @@ const log = {
 
 // ── Smart cookie parser (JSON / Netscape / raw header) ──────────────────
 function jsonToNetscape(json: any[]): string {
-  return json
+  const lines = json
     .filter((c: any) => c.name && c.value)
     .map((c: any) => {
       const domain = c.domain || '.youtube.com';
       const includeSub = domain.startsWith('.') ? 'TRUE' : 'FALSE';
       return `${domain}\t${includeSub}\t${c.path || '/'}\t${c.secure ? 'TRUE' : 'FALSE'}\t${c.expirationDate ? Math.floor(c.expirationDate).toString() : '0'}\t${c.name}\t${c.value}`;
-    })
-    .join('\n');
+    });
+  return `# Netscape HTTP Cookie File\n${lines.join('\n')}\n`;
 }
 
 function rawToNetscape(raw: string): string {
@@ -43,8 +43,8 @@ function rawToNetscape(raw: string): string {
   while ((match = regex.exec(raw)) !== null) {
     pairs.push(match[1] + '\t' + match[2]);
   }
-  if (pairs.length === 0) return raw;
-  return pairs.map(p => `.youtube.com\tTRUE\t/\tFALSE\t0\t${p}`).join('\n');
+  if (pairs.length === 0) return `# Netscape HTTP Cookie File\n${raw}\n`;
+  return `# Netscape HTTP Cookie File\n${pairs.map(p => `.youtube.com\tTRUE\t/\tFALSE\t0\t${p}`).join('\n')}\n`;
 }
 
 function writeCookies(raw: string): boolean {
@@ -61,11 +61,11 @@ function writeCookies(raw: string): boolean {
     }
   } catch {}
 
-  // 2) Try to validate as Netscape format
+  // 2) Try to validate as Netscape format — write only valid lines
   const lines = raw.split('\n').filter(l => l.trim() && !l.trim().startsWith('#'));
   const validNetscape = lines.filter(l => l.split('\t').length >= 7);
   if (validNetscape.length > 0) {
-    writeFileSync(COOKIE_FILE, raw, 'utf-8');
+    writeFileSync(COOKIE_FILE, `# Netscape HTTP Cookie File\n${validNetscape.join('\n')}\n`, 'utf-8');
     log.info(`Netscape cookies (${validNetscape.length} entries)`);
     const parts = validNetscape[0].split('\t');
     log.info(`First cookie: ${parts[5]}=${parts[6]?.slice(0, 20)}`);
