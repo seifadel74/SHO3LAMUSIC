@@ -149,10 +149,22 @@ function ytSpawn(args: string[], timeout = CFG.timeout): Promise<{ stdout: strin
 }
 
 function ytArgs(): string[] {
-  const args = ['--no-warnings', '--js-runtimes', 'node'];
-  if (cookieFileValid()) args.push('--cookies', COOKIE_FILE);
-  args.push('--user-agent', CFG.userAgent);
+  const args = ['--no-warnings', '--js-runtimes', 'node', '--user-agent', CFG.userAgent];
   if (CFG.proxy) args.push('--proxy', CFG.proxy);
+  return args;
+}
+
+function ytArgsWithCookies(): string[] {
+  const args = ytArgs();
+  if (cookieFileValid()) {
+    const header = readFileSync(COOKIE_FILE, 'utf-8')
+      .split('\n')
+      .filter(l => l.trim() && !l.startsWith('#'))
+      .map(l => { const p = l.split('\t'); return p.length >= 7 ? `${p[5]}=${p[6]}` : ''; })
+      .filter(Boolean)
+      .join('; ');
+    args.push('--add-header', `Cookie: ${header}`);
+  }
   return args;
 }
 
@@ -272,7 +284,7 @@ export class YouTubeExtractor implements IMusicProvider {
     if (cookieFileValid()) {
       try {
         log.info('Trying direct YouTube stream with cookies');
-        const { stdout } = await ytSpawn([...ytArgs(), '-g', '-f', 'bestaudio', url]);
+        const { stdout } = await ytSpawn([...ytArgsWithCookies(), '-g', '-f', 'bestaudio', url]);
         const streamUrl = stdout.trim().split('\n').find(l => l.startsWith('http'));
         if (streamUrl) {
           log.info('Direct YouTube stream URL resolved');
