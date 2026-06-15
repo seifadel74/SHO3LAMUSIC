@@ -23,34 +23,56 @@ const log = {
   error: (msg: string) => console.error(`[${new Date().toISOString()}] [YT] ${msg}`),
 };
 
-// ── Cookie format auto-detection ──────────────────────────────────────────
+// ── Smart cookie parser (JSON / Netscape / raw header) ──────────────────
 function jsonToNetscape(json: any[]): string {
   return json
     .filter((c: any) => c.name && c.value)
     .map((c: any) => {
-      const domain = c.domain || '';
+      const domain = c.domain || '.youtube.com';
       const includeSub = domain.startsWith('.') ? 'TRUE' : 'FALSE';
-      const path = c.path || '/';
-      const secure = c.secure ? 'TRUE' : 'FALSE';
-      const expires = c.expirationDate ? Math.floor(c.expirationDate).toString() : '0';
-      return `${domain}\t${includeSub}\t${path}\t${secure}\t${expires}\t${c.name}\t${c.value}`;
+      return `${domain}\t${includeSub}\t${c.path || '/'}\t${c.secure ? 'TRUE' : 'FALSE'}\t${c.expirationDate ? Math.floor(c.expirationDate).toString() : '0'}\t${c.name}\t${c.value}`;
     })
     .join('\n');
 }
 
+function rawToNetscape(raw: string): string {
+  // Extract all name=value pairs from any text
+  const pairs: string[] = [];
+  const regex = /([a-zA-Z0-9_\-]+)=([^;\s"'`]+)/g;
+  let match;
+  while ((match = regex.exec(raw)) !== null) {
+    pairs.push(match[1] + '\t' + match[2]);
+  }
+  if (pairs.length === 0) return raw;
+  return pairs.map(p => `.youtube.com\tTRUE\t/\tFALSE\t0\t${p}`).join('\n');
+}
+
 function writeCookies(raw: string): boolean {
+  // 1) Try JSON (EditThisCookie / Cookie-Editor)
   try {
     const parsed = JSON.parse(raw);
     if (Array.isArray(parsed)) {
       writeFileSync(COOKIE_FILE, jsonToNetscape(parsed), 'utf-8');
-      log.info(`Converted JSON cookies (${parsed.length} cookies) to Netscape format`);
+      const count = parsed.filter((c: any) => c.name && c.value).length;
+      log.info(`Converted JSON cookies (${count} cookies)`);
       return true;
     }
-  } catch {
-    // Not JSON — assume Netscape format already
+  } catch {}
+
+  // 2) Try to validate as Netscape format
+  const lines = raw.split('\n').filter(l => l.trim() && !l.trim().startsWith('#'));
+  const validNetscape = lines.filter(l => l.split('\t').length >= 7);
+  if (validNetscape.length > 0) {
+    writeFileSync(COOKIE_FILE, raw, 'utf-8');
+    log.info(`Netscape cookies (${validNetscape.length} entries)`);
+    return true;
   }
-  writeFileSync(COOKIE_FILE, raw, 'utf-8');
-  log.info('Cookies written to temp file');
+
+  // 3) Extract name=value pairs from raw text / header format
+  const converted = rawToNetscape(raw);
+  writeFileSync(COOKIE_FILE, converted, 'utf-8');
+  const pairCount = (converted.match(/\n/g)?.length ?? 0) + 1;
+  log.info(`Extracted ${pairCount} cookie pairs from raw input`);
   return true;
 }
 
