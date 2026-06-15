@@ -55,6 +55,8 @@ function writeCookies(raw: string): boolean {
       writeFileSync(COOKIE_FILE, jsonToNetscape(parsed), 'utf-8');
       const count = parsed.filter((c: any) => c.name && c.value).length;
       log.info(`Converted JSON cookies (${count} cookies)`);
+      const first = jsonToNetscape(parsed).split('\n')[0]?.split('\t');
+      if (first && first.length >= 6) log.info(`First cookie: ${first[5]}=${first[6]?.slice(0, 20)}`);
       return true;
     }
   } catch {}
@@ -65,6 +67,8 @@ function writeCookies(raw: string): boolean {
   if (validNetscape.length > 0) {
     writeFileSync(COOKIE_FILE, raw, 'utf-8');
     log.info(`Netscape cookies (${validNetscape.length} entries)`);
+    const parts = validNetscape[0].split('\t');
+    log.info(`First cookie: ${parts[5]}=${parts[6]?.slice(0, 20)}`);
     return true;
   }
 
@@ -72,7 +76,9 @@ function writeCookies(raw: string): boolean {
   const converted = rawToNetscape(raw);
   writeFileSync(COOKIE_FILE, converted, 'utf-8');
   const pairCount = (converted.match(/\n/g)?.length ?? 0) + 1;
-  log.info(`Extracted ${pairCount} cookie pairs from raw input`);
+  log.info(`Extracted ${pairCount} cookie pairs`);
+  const first = converted.split('\n')[0]?.split('\t');
+  if (first && first.length >= 6) log.info(`First cookie: ${first[5]}=${first[6]?.slice(0, 20)}`);
   return true;
 }
 
