@@ -158,7 +158,6 @@ function ytArgs(): string[] {
 
 function ytArgsWithCookies(): string[] {
   const args = ytArgs();
-  args.push('--extractor-args', 'youtube:player_client=android');
   if (cookieFileValid()) {
     args.push('--cookies', COOKIE_FILE);
   }
@@ -269,11 +268,12 @@ export class YouTubeExtractor implements IMusicProvider {
     if (cookieFileValid()) {
       log.info('Trying direct YouTube stream with cookies');
       try {
-        // Quick auth / availability check
-        await ytSpawn([...ytArgsWithCookies(), '--dump-json', url], 15000);
+        await ytSpawn([...ytArgsWithCookies(), '--dump-json', url], 30000);
         return pipeOutputSync([...ytArgsWithCookies(), '-f', 'bestaudio/best', '-o', '-', url]);
       } catch (e: any) {
-        log.warn(`Direct YouTube failed: ${e.msg || e.message}`);
+        log.warn(`Direct YouTube probe failed: ${e.msg || e.message}, trying pipe anyway`);
+        // Probe failed — try the pipe directly; yt-dlp retries may still succeed
+        return pipeOutputSync([...ytArgsWithCookies(), '-f', 'bestaudio/best', '-o', '-', url]);
       }
     }
 
@@ -293,7 +293,7 @@ export class YouTubeExtractor implements IMusicProvider {
     // Strategy 3: yt-dlp without cookies (relies on retries / geo-bypass)
     log.info('Trying direct YouTube without cookies');
     try {
-      await ytSpawn([...ytArgs(), '--dump-json', '--geo-bypass', url], 10000);
+      await ytSpawn([...ytArgs(), '--dump-json', '--geo-bypass', url], 20000);
       return pipeOutputSync([...ytArgs(), '-f', 'bestaudio/best', '-o', '-', '--geo-bypass', url]);
     } catch (e: any) {
       log.warn(`No-cookies YouTube failed: ${e.msg || e.message}`);
