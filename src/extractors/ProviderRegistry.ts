@@ -3,12 +3,10 @@ import { IMusicProvider } from './IMusicProvider.js';
 import { YouTubeExtractor } from './YouTubeExtractor.js';
 import { SoundCloudExtractor } from './SoundCloudExtractor.js';
 import { DirectProvider } from './DirectProvider.js';
-import { InvidiousProvider } from './InvidiousProvider.js';
 
 const providers: IMusicProvider[] = [];
 
 export function initProviders(): void {
-  register(new InvidiousProvider());
   register(new YouTubeExtractor());
   register(new SoundCloudExtractor());
   register(new DirectProvider());

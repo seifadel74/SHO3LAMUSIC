@@ -1,6 +1,6 @@
 import { Readable } from 'stream';
 import { spawn } from 'child_process';
-import { writeFileSync, existsSync } from 'fs';
+import { writeFileSync, existsSync, readFileSync } from 'fs';
 import { tmpdir } from 'os';
 import { join } from 'path';
 import { Source } from '../types.js';
@@ -23,16 +23,50 @@ const log = {
   error: (msg: string) => console.error(`[${new Date().toISOString()}] [YT] ${msg}`),
 };
 
-// ── Cookies: mandatory for Railway. Without them every request gets bot_detection ──
+// ── Cookie format auto-detection ──────────────────────────────────────────
+function jsonToNetscape(json: any[]): string {
+  return json
+    .filter((c: any) => c.name && c.value)
+    .map((c: any) => {
+      const domain = c.domain || '';
+      const includeSub = domain.startsWith('.') ? 'TRUE' : 'FALSE';
+      const path = c.path || '/';
+      const secure = c.secure ? 'TRUE' : 'FALSE';
+      const expires = c.expirationDate ? Math.floor(c.expirationDate).toString() : '0';
+      return `${domain}\t${includeSub}\t${path}\t${secure}\t${expires}\t${c.name}\t${c.value}`;
+    })
+    .join('\n');
+}
+
+function writeCookies(raw: string): boolean {
+  try {
+    const parsed = JSON.parse(raw);
+    if (Array.isArray(parsed)) {
+      writeFileSync(COOKIE_FILE, jsonToNetscape(parsed), 'utf-8');
+      log.info(`Converted JSON cookies (${parsed.length} cookies) to Netscape format`);
+      return true;
+    }
+  } catch {
+    // Not JSON — assume Netscape format already
+  }
+  writeFileSync(COOKIE_FILE, raw, 'utf-8');
+  log.info('Cookies written to temp file');
+  return true;
+}
+
 const hasCookies = (() => {
   if (process.env.YOUTUBE_COOKIES) {
-    writeFileSync(COOKIE_FILE, process.env.YOUTUBE_COOKIES, 'utf-8');
-    log.info('Cookies loaded from YOUTUBE_COOKIES env');
-    return true;
+    return writeCookies(process.env.YOUTUBE_COOKIES);
   }
-  log.warn('No YOUTUBE_COOKIES set. YouTube playback will fail on datacenter IPs.');
+  log.warn('No YOUTUBE_COOKIES set. YouTube playback may fail on datacenter IPs.');
   return false;
 })();
+
+function cookieFileValid(): boolean {
+  if (!existsSync(COOKIE_FILE)) return false;
+  const content = readFileSync(COOKIE_FILE, 'utf-8').trim();
+  return content.length > 0 && content.includes('\t');
+}
 
 // ── Error classification ────────────────────────────────────────────────────
 export enum YtStreamError {
@@ -45,21 +79,16 @@ export enum YtStreamError {
   Unknown = 'unknown',
 }
 
-export const YT_ERROR_MESSAGES: Record<YtStreamError, string> = {
+const ERR_MSGS: Record<YtStreamError, string> = {
   [YtStreamError.BotDetection]:
     'YouTube blocked this request. Your YOUTUBE_COOKIES may have expired — re-export them from your browser.',
-  [YtStreamError.Http403]:
-    'Access forbidden. This video may be region-restricted.',
-  [YtStreamError.Http429]:
-    'Too many requests. Please wait a moment and try again.',
-  [YtStreamError.Unavailable]:
-    'This video is unavailable.',
-  [YtStreamError.Private]:
-    'This video is private.',
+  [YtStreamError.Http403]: 'Access forbidden. This video may be region-restricted.',
+  [YtStreamError.Http429]: 'Too many requests. Please wait a moment and try again.',
+  [YtStreamError.Unavailable]: 'This video is unavailable.',
+  [YtStreamError.Private]: 'This video is private.',
   [YtStreamError.NoCookies]:
-    'YouTube cookies are required and must be in Netscape format. Export cookies from your browser using "Get cookies.txt" extension.',
-  [YtStreamError.Unknown]:
-    'Unable to stream this YouTube video. Please try another link.',
+    'YouTube cookies are required. Export cookies from your browser using "Get cookies.txt" extension (Netscape format).',
+  [YtStreamError.Unknown]: 'Unable to stream this YouTube video. Please try another link.',
 };
 
 function classifyError(stderr: string): YtStreamError {
@@ -69,19 +98,15 @@ function classifyError(stderr: string): YtStreamError {
   if (/HTTP Error 429/i.test(stderr)) return YtStreamError.Http429;
   if (/Video unavailable/i.test(stderr)) return YtStreamError.Unavailable;
   if (/Private video/i.test(stderr)) return YtStreamError.Private;
+  if (/Requested format is not available/i.test(stderr)) return YtStreamError.Unknown;
   return YtStreamError.Unknown;
 }
 
-function userMessage(err: YtStreamError): string {
-  return YT_ERROR_MESSAGES[err];
-}
-
-// ── Spawn wrapper ───────────────────────────────────────────────────────────
+// ── yt-dlp helpers ──────────────────────────────────────────────────────────
 function ytSpawn(args: string[], timeout = CFG.timeout): Promise<{ stdout: string; stderr: string }> {
   return new Promise((resolve, reject) => {
     const proc = spawn(BIN, args, { timeout });
-    let stdout = '';
-    let stderr = '';
+    let stdout = '', stderr = '';
     proc.stdout.on('data', (d: Buffer) => { stdout += d.toString(); });
     proc.stderr.on('data', (d: Buffer) => { stderr += d.toString(); });
     proc.on('error', (e: Error) => reject({ type: YtStreamError.Unknown, msg: e.message, stderr, stdout }));
@@ -89,142 +114,165 @@ function ytSpawn(args: string[], timeout = CFG.timeout): Promise<{ stdout: strin
       if (code === 0) resolve({ stdout, stderr });
       else {
         const type = classifyError(stderr);
-        reject({ type, msg: userMessage(type), stderr, stdout });
+        reject({ type, msg: ERR_MSGS[type], stderr, stdout });
       }
     });
   });
 }
 
 function ytArgs(): string[] {
-  const args: string[] = ['--no-warnings', '--js-runtimes', 'node'];
-  if (existsSync(COOKIE_FILE)) args.push('--cookies', COOKIE_FILE);
+  const args = ['--no-warnings', '--js-runtimes', 'node'];
+  if (cookieFileValid()) args.push('--cookies', COOKIE_FILE);
   args.push('--user-agent', CFG.userAgent);
   if (CFG.proxy) args.push('--proxy', CFG.proxy);
   return args;
 }
 
+// ── Invidious fallback ─────────────────────────────────────────────────────
+const INVIDIOUS_INSTANCES = [
+  'https://inv.nadeko.net', 'https://yewtu.be',
+  'https://invidious.private.coffee', 'https://vid.puffyan.us',
+  'https://inv.vern.cc', 'https://invidious.slipfox.xyz',
+];
+
+let invidiousInstances: string[] = [];
+let cachedInvidious: string | null = null;
+
+async function ensureInvidious(): Promise<void> {
+  if (invidiousInstances.length > 0) return;
+  const set = new Set(INVIDIOUS_INSTANCES);
+  try {
+    const res = await fetch('https://api.invidious.io/instances.json?sort_by=type,users', { signal: AbortSignal.timeout(8000) });
+    if (res.ok) {
+      const apiData: any = await res.json();
+      for (const entry of apiData) {
+        const info = entry[1];
+        if (info.type === 'https' && info.api && info.uri) set.add(info.uri.replace(/\/$/, ''));
+      }
+    }
+  } catch {}
+  invidiousInstances = [...set];
+}
+
+async function streamViaInvidious(url: string): Promise<Readable> {
+  const id = url.match(/(?:v=|youtu\.be\/|shorts\/)([a-zA-Z0-9_-]{11})/)?.[1];
+  if (!id) throw new Error('Invalid YouTube URL');
+  await ensureInvidious();
+
+  if (cachedInvidious) {
+    invidiousInstances = [cachedInvidious, ...invidiousInstances.filter(i => i !== cachedInvidious)];
+  }
+
+  let lastErr = '';
+  for (const inst of invidiousInstances) {
+    try {
+      log.info(`Trying Invidious via ${inst}`);
+      const iUrl = `${inst}/watch?v=${id}`;
+      const out = await ytSpawn(['--no-warnings', '-g', iUrl], 30000);
+      const streamUrl = out.stdout.trim().split('\n').find(l => l.startsWith('http'));
+      if (!streamUrl) continue;
+      cachedInvidious = inst;
+      log.info(`Invidious stream URL resolved`);
+
+      const ffmpegPath = (await import('ffmpeg-static')).default;
+      const ffProc = spawn(ffmpegPath!, [
+        '-reconnect', '1', '-reconnect_streamed', '1', '-reconnect_delay_max', '5',
+        '-i', streamUrl, '-f', 'opus', '-ar', '48000', '-ac', '2', 'pipe:1',
+      ]);
+      ffProc.stderr.on('data', (d: Buffer) => {
+        const line = d.toString().trim();
+        if (line && !line.includes('ffmpeg version') && !line.includes('built with')
+          && !line.includes('configuration') && !line.startsWith('lib')) log.info(`[ffmpeg] ${line}`);
+      });
+      ffProc.on('error', e => log.error(`ffmpeg error: ${e.message}`));
+      ffProc.on('exit', c => log.info(`ffmpeg exited (${c})`));
+      return ffProc.stdout;
+    } catch (e: any) {
+      lastErr = (e.stderr || e.msg || e.message || '').slice(0, 100);
+      log.warn(`${inst}: ${lastErr}`);
+    }
+  }
+
+  const empty = new Readable({ read() { this.push(null); } });
+  (empty as any)._ytError = `YouTube playback failed: ${lastErr || 'All sources exhausted'}`;
+  return empty;
+}
+
+// ── URL helpers ──────────────────────────────────────────────────────────────
 const VIDEO_ID_RE = /(?:v=|youtu\.be\/|shorts\/)([a-zA-Z0-9_-]{11})/;
 const PLAYLIST_ID_RE = /list=([a-zA-Z0-9_-]+)/;
 
-function trackFromData(v: { title?: string; url: string; durationInSec?: number; thumbnail?: string }): SearchResult {
-  return {
-    title: v.title ?? 'Unknown',
-    url: v.url,
-    duration: v.durationInSec ?? 0,
-    thumbnail: v.thumbnail ?? '',
-    source: Source.YouTube,
-  };
+function trackData(v: { title?: string; url: string; durationInSec?: number; thumbnail?: string }): SearchResult {
+  return { title: v.title ?? 'Unknown', url: v.url, duration: v.durationInSec ?? 0, thumbnail: v.thumbnail ?? '', source: Source.YouTube };
 }
 
-function extractVideoId(url: string): string | null {
-  return url.match(VIDEO_ID_RE)?.[1] ?? null;
-}
-
+// ── Provider class ───────────────────────────────────────────────────────────
 export class YouTubeExtractor implements IMusicProvider {
   readonly name = 'YouTube';
-  readonly enabled = hasCookies;
+  readonly enabled = true;
   readonly source = Source.YouTube;
+
+  validate(url: string): boolean { return VIDEO_ID_RE.test(url); }
 
   async search(query: string): Promise<SearchResult[]> {
     const results = await ytSearch(query);
-    return results.videos.slice(0, 5).map((v) =>
-      trackFromData({ title: v.title, url: v.url, durationInSec: v.seconds, thumbnail: v.image })
-    );
-  }
-
-  validate(url: string): boolean {
-    return VIDEO_ID_RE.test(url);
+    return results.videos.slice(0, 5).map(v => trackData({ title: v.title, url: v.url, durationInSec: v.seconds, thumbnail: v.image }));
   }
 
   async getInfo(url: string): Promise<SearchResult> {
-    const id = extractVideoId(url);
+    const id = extractId(url);
     if (!id) throw new Error('Invalid YouTube URL');
-
-    const { stdout } = await ytSpawn([
-      ...ytArgs(),
-      '--dump-json', '--flat-playlist',
-      `https://youtube.com/watch?v=${id}`,
-    ]);
-    const json = JSON.parse(stdout);
-    return trackFromData({
-      title: json.title,
-      url: `https://youtube.com/watch?v=${id}`,
-      durationInSec: json.duration ?? 0,
-      thumbnail: json.thumbnail ?? '',
-    });
+    const data = await ytSearch({ videoId: id });
+    return trackData({ title: data.title, url: `https://youtube.com/watch?v=${id}`, durationInSec: data.seconds, thumbnail: data.image });
   }
 
   async getPlaylist(url: string): Promise<SearchResult[]> {
     const id = url.match(PLAYLIST_ID_RE)?.[1];
     if (!id) throw new Error('Invalid playlist URL');
-
-    const { stdout } = await ytSpawn([
-      ...ytArgs(),
-      '--dump-json', '--flat-playlist',
-      url,
-    ], 30000);
-
-    return stdout
-      .trim()
-      .split('\n')
-      .slice(0, 50)
-      .map((line) => {
-        const v = JSON.parse(line);
-        return trackFromData({
-          title: v.title,
-          url: `https://youtube.com/watch?v=${v.id}`,
-          durationInSec: v.duration ?? 0,
-          thumbnail: v.thumbnail ?? '',
-        });
-      });
+    const { stdout } = await ytSpawn([...ytArgs(), '--dump-json', '--flat-playlist', url], 30000);
+    return stdout.trim().split('\n').slice(0, 50).map(line => {
+      const v = JSON.parse(line);
+      return trackData({ title: v.title, url: `https://youtube.com/watch?v=${v.id}`, durationInSec: v.duration ?? 0, thumbnail: v.thumbnail ?? '' });
+    });
   }
 
   async stream(url: string): Promise<Readable> {
-    if (!this.validate(url)) throw new Error('Invalid YouTube URL');
-    if (!hasCookies) {
-      log.error('Cannot stream YouTube: no cookies configured');
-      const empty = new Readable({ read() { this.push(null); } });
-      (empty as any)._ytError = userMessage(YtStreamError.NoCookies);
-      return empty;
-    }
+    const id = extractId(url);
+    if (!id) throw new Error('Invalid YouTube URL');
 
-    const ffmpegPath = (await import('ffmpeg-static')).default;
-
-    let streamUrl: string;
-    try {
-      const { stdout } = await ytSpawn([...ytArgs(), '-g', '-f', 'bestaudio', url]);
-      const match = stdout.trim().split('\n').filter((l) => l.startsWith('http'));
-      if (!match.length) throw new Error('No stream URL returned');
-      streamUrl = match[0];
-    } catch (err: any) {
-      log.error(`stream failed for ${url}: ${err.msg || err.message}`);
-      const empty = new Readable({ read() { this.push(null); } });
-      (empty as any)._ytError = err.msg || userMessage(YtStreamError.Unknown);
-      return empty;
-    }
-
-    log.info(`Stream URL resolved (${streamUrl.length} chars)`);
-    const ffProc = spawn(ffmpegPath!, [
-      '-reconnect', '1',
-      '-reconnect_streamed', '1',
-      '-reconnect_delay_max', '5',
-      '-i', streamUrl,
-      '-f', 'opus',
-      '-ar', '48000',
-      '-ac', '2',
-      'pipe:1',
-    ]);
-
-    ffProc.stderr.on('data', (d: Buffer) => {
-      const line = d.toString().trim();
-      if (line && !line.includes('ffmpeg version') && !line.includes('built with')
-        && !line.includes('configuration') && !line.startsWith('lib')) {
-        log.info(`[ffmpeg] ${line}`);
+    // Strategy 1: yt-dlp directly to YouTube with cookies
+    if (cookieFileValid()) {
+      try {
+        log.info('Trying direct YouTube stream with cookies');
+        const { stdout } = await ytSpawn([...ytArgs(), '-g', '-f', 'bestaudio', url]);
+        const streamUrl = stdout.trim().split('\n').find(l => l.startsWith('http'));
+        if (streamUrl) {
+          log.info('Direct YouTube stream URL resolved');
+          const ffmpegPath = (await import('ffmpeg-static')).default;
+          const ffProc = spawn(ffmpegPath!, [
+            '-reconnect', '1', '-reconnect_streamed', '1', '-reconnect_delay_max', '5',
+            '-i', streamUrl, '-f', 'opus', '-ar', '48000', '-ac', '2', 'pipe:1',
+          ]);
+          ffProc.stderr.on('data', (d: Buffer) => {
+            const line = d.toString().trim();
+            if (line && !line.includes('ffmpeg version') && !line.includes('built with')
+              && !line.includes('configuration') && !line.startsWith('lib')) log.info(`[ffmpeg] ${line}`);
+          });
+          ffProc.on('error', e => log.error(`ffmpeg error: ${e.message}`));
+          ffProc.on('exit', c => log.info(`ffmpeg exited (${c})`));
+          return ffProc.stdout;
+        }
+      } catch (e: any) {
+        log.warn(`Direct YouTube failed: ${e.msg || e.message}`);
       }
-    });
-    ffProc.on('error', (e) => log.error(`ffmpeg error: ${e.message}`));
-    ffProc.on('exit', (c) => log.info(`ffmpeg exited (${c})`));
+    }
 
-    return ffProc.stdout;
+    // Strategy 2: Fallback to Invidious
+    log.info('Falling back to Invidious proxy');
+    return streamViaInvidious(url);
   }
+}
+
+function extractId(url: string): string | null {
+  return url.match(VIDEO_ID_RE)?.[1] ?? null;
 }
