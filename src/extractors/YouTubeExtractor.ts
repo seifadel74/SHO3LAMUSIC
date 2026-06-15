@@ -286,11 +286,14 @@ export class YouTubeExtractor implements IMusicProvider {
     }
 
     for (const inst of invidiousInstances) {
-      log.info(`Trying Invidious via ${inst}`);
-      return pipeOutputSync(['--no-warnings', '-o', '-', `${inst}/watch?v=${id}`]);
+      log.info(`Trying Invidious via ${inst}${CFG.proxy ? ' (with proxy)' : ''}`);
+      const args = ['--no-warnings', '-o', '-'];
+      if (CFG.proxy) args.push('--proxy', CFG.proxy);
+      args.push(`${inst}/watch?v=${id}`);
+      return pipeOutputSync(args);
     }
 
-    // Strategy 3: yt-dlp without cookies (relies on retries / geo-bypass)
+    // Strategy 3: yt-dlp without cookies (relies on retries / geo-bypass / proxy)
     log.info('Trying direct YouTube without cookies');
     try {
       await ytSpawn([...ytArgs(), '--dump-json', '--geo-bypass', url], 20000);
